@@ -1,0 +1,53 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+.dlt/
+.streamlit/secrets.toml
+
+# AWS local configuration
+.aws/
+
+# DuckDB and local data
+*.duckdb
+*.duckdb.wal
+data/raw/
+data/warehouse/
+raw/
+
+# Airflow local runtime
+airflow/.env
+airflow/logs/
+airflow/config/airflow.cfg
+
+# dbt generated files
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+
+# Logs
+*.log
+logs/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
