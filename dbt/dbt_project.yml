@@ -12,6 +12,11 @@ models:
     staging:
       +materialized: view
       +schema: staging
+    intermediate:
+      # Materialised as a table: the hourly spine is a filtered cross product
+      # plus twelve lag windows, and both AQI marts read it.
+      +materialized: table
+      +schema: staging
     dimensions:
       +materialized: table
       +schema: analytics

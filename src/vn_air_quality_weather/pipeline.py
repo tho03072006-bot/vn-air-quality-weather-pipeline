@@ -28,6 +28,7 @@ from vn_air_quality_weather.loaders.duckdb_loader import LoadSummary, load_incre
 from vn_air_quality_weather.models import (
     ModeledAirQualityHourly,
     ObservedAirQualityHourly,
+    PipelineRunAudit,
     WeatherHourly,
 )
 from vn_air_quality_weather.settings import Settings, get_settings
@@ -68,13 +69,17 @@ def run_day(
     interval_start = datetime.combine(data_date, time.min, tzinfo=UTC)
     interval_end = interval_start + timedelta(days=1)
     ingestion_time = datetime.now(UTC)
+    retry_policy = settings.retry_policy()
 
     weather_records: list[WeatherHourly] = []
     modeled_records: list[ModeledAirQualityHourly] = []
     observed_records: list[ObservedAirQualityHourly] = []
     raw_objects = 0
 
-    with OpenMeteoClient() as open_meteo:
+    with OpenMeteoClient(
+        timeout_seconds=settings.http_timeout_seconds,
+        retry_policy=retry_policy,
+    ) as open_meteo:
         for city in CITIES.values():
             LOGGER.info("extract source=open_meteo_weather city=%s date=%s", city.key, data_date)
             weather_payload = open_meteo.fetch_weather(city, data_date)
@@ -131,7 +136,11 @@ def run_day(
             raw_objects += 1
 
     if include_openaq:
-        with OpenAQClient(settings.require_openaq_api_key()) as open_aq:
+        with OpenAQClient(
+            settings.require_openaq_api_key(),
+            timeout_seconds=settings.http_timeout_seconds,
+            retry_policy=retry_policy,
+        ) as open_aq:
             for city in CITIES.values():
                 LOGGER.info("discover source=openaq city=%s", city.key)
                 locations_payload = open_aq.fetch_locations(city, settings.openaq_radius_meters)
@@ -191,6 +200,28 @@ def run_day(
         modeled_air_quality=modeled_records,
     )
     modeled_measurement_rows = load_summary.air_quality_rows - len(observed_records)
+    finished_at = datetime.now(UTC)
+    load_incremental(
+        database_path=settings.duckdb_path,
+        weather=[],
+        observed_air_quality=[],
+        modeled_air_quality=[],
+        pipeline_runs=[
+            PipelineRunAudit(
+                run_id=run_id,
+                data_date=data_date,
+                started_at_utc=ingestion_time,
+                finished_at_utc=finished_at,
+                duration_seconds=(finished_at - ingestion_time).total_seconds(),
+                raw_backend=settings.raw_backend,
+                include_openaq=include_openaq,
+                raw_objects=raw_objects,
+                weather_rows=len(weather_records),
+                observed_air_quality_rows=len(observed_records),
+                modeled_air_quality_rows=modeled_measurement_rows,
+            )
+        ],
+    )
     LOGGER.info(
         "loaded date=%s weather=%d observed_air_quality=%d modeled_air_quality=%d",
         data_date,

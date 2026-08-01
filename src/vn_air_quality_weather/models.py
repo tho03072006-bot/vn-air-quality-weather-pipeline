@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,3 +43,21 @@ class ObservedAirQualityHourly:
     flagged: bool
     source_name: str = "openaq"
     source_type: str = "observed"
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineRunAudit:
+    """One row per pipeline execution, used to prove freshness and lineage."""
+
+    run_id: str
+    data_date: date
+    started_at_utc: datetime
+    finished_at_utc: datetime
+    duration_seconds: float
+    raw_backend: str
+    include_openaq: bool
+    raw_objects: int
+    weather_rows: int
+    observed_air_quality_rows: int
+    modeled_air_quality_rows: int
+    pipeline_version: str = "0.1.0"

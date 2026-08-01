@@ -6,6 +6,7 @@ import httpx
 
 from vn_air_quality_weather.cities import City
 from vn_air_quality_weather.models import ModeledAirQualityHourly, WeatherHourly
+from vn_air_quality_weather.retry import DEFAULT_RETRY_POLICY, RetryPolicy, request_with_retry
 
 AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 WEATHER_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
@@ -29,16 +30,18 @@ class OpenMeteoClient:
         self,
         http_client: httpx.Client | None = None,
         timeout_seconds: float = 30.0,
+        retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
     ) -> None:
         self._owns_client = http_client is None
         self._client = http_client or httpx.Client(timeout=timeout_seconds)
+        self._retry_policy = retry_policy
 
     def fetch_modeled_air_quality(
         self,
         city: City,
         data_date: date,
     ) -> dict[str, Any]:
-        response = self._client.get(
+        return self._get_json(
             AIR_QUALITY_URL,
             params={
                 "latitude": city.latitude,
@@ -48,17 +51,11 @@ class OpenMeteoClient:
                 "end_date": data_date.isoformat(),
                 "timezone": "GMT",
             },
+            label="air-quality",
         )
-        response.raise_for_status()
-
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError("Open-Meteo returned a non-object JSON payload")
-
-        return payload
 
     def fetch_weather(self, city: City, data_date: date) -> dict[str, Any]:
-        response = self._client.get(
+        return self._get_json(
             WEATHER_URL,
             params={
                 "latitude": city.latitude,
@@ -68,12 +65,20 @@ class OpenMeteoClient:
                 "end_date": data_date.isoformat(),
                 "timezone": "GMT",
             },
+            label="weather",
         )
-        response.raise_for_status()
 
+    def _get_json(self, url: str, *, params: dict[str, Any], label: str) -> dict[str, Any]:
+        response = request_with_retry(
+            self._client,
+            "GET",
+            url,
+            policy=self._retry_policy,
+            params=params,
+        )
         payload = response.json()
         if not isinstance(payload, dict):
-            raise ValueError("Open-Meteo returned a non-object weather payload")
+            raise ValueError(f"Open-Meteo returned a non-object {label} payload")
         return payload
 
     def close(self) -> None:
@@ -91,42 +96,21 @@ def normalize_modeled_air_quality(
     city_key: str,
     payload: Mapping[str, Any],
 ) -> list[ModeledAirQualityHourly]:
-    hourly = payload.get("hourly")
-    if not isinstance(hourly, Mapping):
-        raise ValueError("Open-Meteo payload is missing hourly data")
-
-    times = hourly.get("time")
-    if not isinstance(times, list):
-        raise ValueError("Open-Meteo payload is missing hourly timestamps")
-
-    series = {variable: hourly.get(variable) for variable in AIR_QUALITY_VARIABLES}
-
-    for variable, values in series.items():
-        if not isinstance(values, list):
-            raise ValueError(f"Open-Meteo payload is missing {variable}")
-        if len(values) != len(times):
-            raise ValueError(f"Open-Meteo {variable} length does not match time length")
-
+    hourly = _validated_hourly(payload, AIR_QUALITY_VARIABLES, "air-quality")
+    times = hourly["time"]
     grid_latitude = float(payload["latitude"])
     grid_longitude = float(payload["longitude"])
 
     records: list[ModeledAirQualityHourly] = []
-
     for index, timestamp in enumerate(times):
-        observed_at = datetime.fromisoformat(str(timestamp))
-        if observed_at.tzinfo is None:
-            observed_at = observed_at.replace(tzinfo=UTC)
-        else:
-            observed_at = observed_at.astimezone(UTC)
-
         records.append(
             ModeledAirQualityHourly(
                 city_key=city_key,
-                observed_at_utc=observed_at,
-                pm2_5=_optional_float(series["pm2_5"][index]),
-                pm10=_optional_float(series["pm10"][index]),
-                nitrogen_dioxide=_optional_float(series["nitrogen_dioxide"][index]),
-                ozone=_optional_float(series["ozone"][index]),
+                observed_at_utc=_utc_datetime(timestamp),
+                pm2_5=_optional_float(hourly["pm2_5"][index]),
+                pm10=_optional_float(hourly["pm10"][index]),
+                nitrogen_dioxide=_optional_float(hourly["nitrogen_dioxide"][index]),
+                ozone=_optional_float(hourly["ozone"][index]),
                 grid_latitude=grid_latitude,
                 grid_longitude=grid_longitude,
             )

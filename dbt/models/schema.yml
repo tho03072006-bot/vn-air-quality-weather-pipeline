@@ -58,3 +58,82 @@ models:
     columns:
       - name: coverage_ratio
         data_tests: [not_null]
+
+  - name: dim_vn_aqi_breakpoint
+    description: >
+      Bang 2 of Quyet dinh 1459/QD-TCMT. One row per linear AQI segment in
+      micrograms per cubic metre.
+    columns:
+      - name: aqi_scale_key
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['pm25', 'pm10', 'no2', 'o3_1h', 'o3_8h']
+      - name: pollutant
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_pollutant')
+                field: pollutant
+      - name: level_index
+        data_tests: [not_null]
+      - name: bp_low
+        data_tests: [not_null]
+      - name: bp_high
+        data_tests: [not_null]
+
+  - name: dim_vn_aqi_category
+    description: Bang 1, 4 and 5 of Quyet dinh 1459/QD-TCMT.
+    columns:
+      - name: band_index
+        data_tests: [unique, not_null]
+      - name: category_vi
+        data_tests: [unique, not_null]
+
+  - name: fct_pipeline_run
+    description: One row per pipeline run_id and UTC data date.
+    columns:
+      - name: run_id
+        data_tests: [not_null]
+      - name: data_date_utc
+        data_tests: [not_null]
+      - name: finished_at_utc
+        data_tests: [not_null]
+
+  - name: mart_city_aqi_hourly
+    description: VN_AQI gio per city, UTC hour and source.
+    columns:
+      - name: city_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_city')
+                field: city_key
+      - name: observed_at_utc
+        data_tests: [not_null]
+      - name: dominant_pollutant
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['pm25', 'pm10', 'no2', 'o3']
+
+  - name: mart_city_aqi_daily
+    description: VN_AQI ngay per city, UTC date and source.
+    columns:
+      - name: city_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_city')
+                field: city_key
+      - name: data_date_utc
+        data_tests: [not_null]
+      - name: dominant_pollutant
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['pm25', 'pm10', 'no2', 'o3']

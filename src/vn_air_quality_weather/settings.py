@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from vn_air_quality_weather.retry import RetryPolicy
+
 
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables and .env."""
@@ -27,6 +29,20 @@ class Settings(BaseSettings):
     raw_backend: Literal["local", "s3"] = "local"
     openaq_radius_meters: int = 25_000
     airflow_image_name: str = "apache/airflow:3.3.0"
+
+    http_timeout_seconds: float = 30.0
+    http_max_attempts: int = 5
+    http_backoff_base_seconds: float = 0.5
+    http_backoff_max_seconds: float = 30.0
+
+    def retry_policy(self) -> RetryPolicy:
+        """Build the shared HTTP retry policy from configuration."""
+
+        return RetryPolicy(
+            max_attempts=self.http_max_attempts,
+            backoff_base_seconds=self.http_backoff_base_seconds,
+            backoff_max_seconds=self.http_backoff_max_seconds,
+        )
 
     def require_openaq_api_key(self) -> str:
         """Return the OpenAQ key or fail without exposing the secret."""

@@ -7,6 +7,7 @@ import httpx
 
 from vn_air_quality_weather.cities import City
 from vn_air_quality_weather.models import ObservedAirQualityHourly
+from vn_air_quality_weather.retry import DEFAULT_RETRY_POLICY, RetryPolicy, request_with_retry
 
 OPENAQ_BASE_URL = "https://api.openaq.org/v3"
 TARGET_POLLUTANTS = frozenset({"pm25", "pm10", "no2", "o3"})
@@ -29,16 +30,21 @@ class OpenAQClient:
         api_key: str,
         http_client: httpx.Client | None = None,
         timeout_seconds: float = 30.0,
+        retry_policy: RetryPolicy = DEFAULT_RETRY_POLICY,
     ) -> None:
         if not api_key.strip():
             raise ValueError("OpenAQ API key must not be empty")
         self._owns_client = http_client is None
         self._client = http_client or httpx.Client(timeout=timeout_seconds)
         self._headers = {"X-API-Key": api_key}
+        self._retry_policy = retry_policy
 
     def fetch_locations(self, city: City, radius_meters: int = 25_000) -> dict[str, Any]:
-        response = self._client.get(
+        response = request_with_retry(
+            self._client,
+            "GET",
             f"{OPENAQ_BASE_URL}/locations",
+            policy=self._retry_policy,
             headers=self._headers,
             params={
                 "coordinates": f"{city.latitude},{city.longitude}",
@@ -47,7 +53,6 @@ class OpenAQClient:
                 "page": 1,
             },
         )
-        response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("OpenAQ returned a non-object locations payload")
@@ -71,8 +76,11 @@ class OpenAQClient:
         limit = 1000
 
         for page in range(1, max_pages + 1):
-            response = self._client.get(
+            response = request_with_retry(
+                self._client,
+                "GET",
                 f"{OPENAQ_BASE_URL}/sensors/{sensor_id}/hours",
+                policy=self._retry_policy,
                 headers=self._headers,
                 params={
                     "datetime_from": _iso_z(interval_start_utc),
@@ -81,7 +89,6 @@ class OpenAQClient:
                     "page": page,
                 },
             )
-            response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, Mapping):
                 raise ValueError("OpenAQ returned a non-object sensor-hours payload")

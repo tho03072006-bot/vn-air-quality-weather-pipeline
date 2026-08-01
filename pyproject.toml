@@ -9,12 +9,14 @@ description = "Vietnam air-quality and weather data engineering pipeline"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "altair>=5.4,<6",
     "boto3>=1.40,<2",
+    "dbt-core>=1.9,<2",
     "dbt-duckdb>=1.9,<2",
     "dlt[duckdb]>=1.29,<2",
+    "duckdb>=1.1,<2",
     "httpx>=0.28,<1",
     "pandas>=2.3,<3",
-    "plotly>=6,<7",
     "pydantic-settings>=2.14,<3",
     "streamlit>=1.49,<2",
 ]
@@ -34,7 +36,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --cov=vn_air_quality_weather --cov-report=term-missing --cov-fail-under=70"
+
+[tool.coverage.run]
+branch = true
+source = ["vn_air_quality_weather"]
 
 [tool.ruff]
 target-version = "py311"

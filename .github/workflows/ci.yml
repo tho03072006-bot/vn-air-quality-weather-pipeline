@@ -30,6 +30,16 @@ jobs:
         env:
           DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
         run: dbt build --project-dir dbt --profiles-dir dbt
+      - name: Generate dbt docs
+        env:
+          DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
+        run: dbt docs generate --project-dir dbt --profiles-dir dbt --static
+      - name: Upload dbt docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-docs
+          path: dbt/target/static_index.html
+          if-no-files-found: warn
       - name: Validate Docker Compose
         run: |
           cp .env.example .env

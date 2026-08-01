@@ -7,6 +7,7 @@ import dlt
 from vn_air_quality_weather.models import (
     ModeledAirQualityHourly,
     ObservedAirQualityHourly,
+    PipelineRunAudit,
     WeatherHourly,
 )
 
@@ -25,6 +26,7 @@ def load_incremental(
     weather: list[WeatherHourly],
     observed_air_quality: list[ObservedAirQualityHourly],
     modeled_air_quality: list[ModeledAirQualityHourly],
+    pipeline_runs: list[PipelineRunAudit] | None = None,
     pipeline_name: str = "vn_air_quality_weather",
 ) -> LoadSummary:
     """Merge a batch into DuckDB using stable natural keys."""
@@ -36,6 +38,7 @@ def load_incremental(
         *(_serialize_dataclass(record) for record in observed_air_quality),
         *modeled_air_quality_rows(modeled_air_quality),
     ]
+    run_audit_data = [_serialize_dataclass(record) for record in pipeline_runs or []]
 
     pipeline = dlt.pipeline(
         pipeline_name=pipeline_name,
@@ -70,6 +73,15 @@ def load_incremental(
                     "observed_at_utc",
                     "source_name",
                 ],
+                write_disposition="merge",
+            )
+        )
+    if run_audit_data:
+        resources.append(
+            dlt.resource(
+                run_audit_data,
+                name="pipeline_runs",
+                primary_key=["run_id", "data_date"],
                 write_disposition="merge",
             )
         )

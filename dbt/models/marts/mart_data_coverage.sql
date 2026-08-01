@@ -1,6 +1,8 @@
 select
     city_key,
-    cast(observed_at_utc as date) as data_date_utc,
+    -- AT TIME ZONE 'UTC' because a bare TIMESTAMPTZ-to-DATE cast follows the
+    -- session TimeZone and would shift the grain by seven hours locally.
+    cast(observed_at_utc at time zone 'UTC' as date) as data_date_utc,
     pollutant,
     source_name,
     source_type,

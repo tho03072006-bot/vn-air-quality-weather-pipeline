@@ -58,12 +58,23 @@ dbt grain tests reject duplicates.
 
 ## Offline validation
 
-The CI path does not call real APIs or AWS:
+One command runs every gate. It calls no real API and no AWS endpoint:
+
+```powershell
+.\scripts\verify.ps1
+```
+
+The script stops at the first failure and names the gate that broke. Add
+`-UseRealWarehouse` to build dbt against the real DuckDB file instead of the
+demo fixture, or `-SkipDbt` to run only the Python gates.
+
+The individual steps, if you prefer to run them by hand:
 
 ```powershell
 python -m ruff format --check .
 python -m ruff check .
 python -m pytest
+python -m compileall -q airflow\dags dashboard
 python scripts\build_demo_warehouse.py `
     --database data\warehouse\demo.duckdb
 $env:DUCKDB_PATH = (Resolve-Path "data\warehouse\demo.duckdb")
@@ -83,6 +94,38 @@ Filters cover UTC date range, city, pollutant and data type. KPIs cover average
 and maximum concentration, available hours, coverage, temperature, humidity and
 wind. Charts show trends, city comparison, hourly pattern, humidity/wind
 relationships, rainy versus dry hours, and missing-data coverage.
+
+Three tabs:
+
+- **Concentration and weather** — the raw µg/m³ view described above.
+- **VN_AQI** — hourly and daily index, dominant pollutant, band distribution and
+  health advice.
+- **Pipeline health** — freshness and row counts read from the audit table.
+
+## VN_AQI
+
+The index follows [Quyết định 1459/QĐ-TCMT](https://cem.gov.vn/storage/news_file_attach/QD%201459%20TCMT%20ngay%2012.11.2019%20AQI.pdf)
+(12 November 2019). PM2.5 and PM10 use the Nowcast weighted mean for the hourly
+index and the 24-hour mean for the daily index; NO2 uses the highest 1-hour
+mean; O3 takes the larger of its 1-hour and 8-hour sub-indices. The published
+value is the maximum sub-index, and it is suppressed when neither PM10 nor
+PM2.5 is available, as muc 2.1 requires.
+
+Breakpoints live in `dim_vn_aqi_breakpoint` and bands in
+`dim_vn_aqi_category`, so the legal reference is data rather than code. A dbt
+singular test replays the worked examples printed in muc 2.3 of the decision,
+which means a mistyped breakpoint fails the build.
+
+Deviations from the decision (UTC day boundary, 8-hour completeness rule,
+modeled-source caveat) are listed in
+[docs/architecture.md](docs/architecture.md).
+
+## Pipeline observability
+
+Every run merges one row into `raw.pipeline_runs` keyed on `run_id + data_date`,
+surfaced as `analytics.fct_pipeline_run` with duration, per-source row counts
+and `is_latest_run_for_date`. dbt source freshness warns after 36 hours and
+errors after 72.
 
 ## Airflow 3 with Docker Compose
 
