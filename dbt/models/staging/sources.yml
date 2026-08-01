@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: Incremental dlt tables loaded from immutable API responses.
+    tables:
+      - name: weather_hourly
+      - name: air_quality_hourly

@@ -9,10 +9,18 @@ description = "Vietnam air-quality and weather data engineering pipeline"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "boto3>=1.40,<2",
+    "dbt-duckdb>=1.9,<2",
     "dlt[duckdb]>=1.29,<2",
     "httpx>=0.28,<1",
+    "pandas>=2.3,<3",
+    "plotly>=6,<7",
     "pydantic-settings>=2.14,<3",
+    "streamlit>=1.49,<2",
 ]
+
+[project.scripts]
+vn-air-pipeline = "vn_air_quality_weather.pipeline:main"
 
 [project.optional-dependencies]
 dev = [

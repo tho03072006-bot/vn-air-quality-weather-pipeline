@@ -1,0 +1,60 @@
+version: 2
+
+models:
+  - name: dim_city
+    description: One row per target city.
+    columns:
+      - name: city_key
+        data_tests: [unique, not_null]
+  - name: dim_pollutant
+    columns:
+      - name: pollutant
+        data_tests:
+          - unique
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['pm25', 'pm10', 'no2', 'o3']
+  - name: fct_weather_hourly
+    description: One row per city and UTC hour.
+    columns:
+      - name: city_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_city')
+                field: city_key
+      - name: observed_at_utc
+        data_tests: [not_null]
+  - name: fct_air_quality_hourly
+    description: One row per city, station, pollutant, source and UTC hour.
+    columns:
+      - name: city_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_city')
+                field: city_key
+      - name: pollutant
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_pollutant')
+                field: pollutant
+      - name: observed_at_utc
+        data_tests: [not_null]
+      - name: concentration
+        data_tests: [not_null]
+      - name: unit
+        data_tests: [not_null]
+  - name: mart_city_air_quality_hourly
+    columns:
+      - name: concentration
+        data_tests: [not_null]
+  - name: mart_data_coverage
+    columns:
+      - name: coverage_ratio
+        data_tests: [not_null]

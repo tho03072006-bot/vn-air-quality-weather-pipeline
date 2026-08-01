@@ -6,8 +6,10 @@ import pytest
 from vn_air_quality_weather.cities import CITIES
 from vn_air_quality_weather.clients.open_meteo import (
     AIR_QUALITY_URL,
+    WEATHER_URL,
     OpenMeteoClient,
     normalize_modeled_air_quality,
+    normalize_weather,
 )
 
 SAMPLE_PAYLOAD = {
@@ -23,6 +25,20 @@ SAMPLE_PAYLOAD = {
         "pm10": [20.0, 21.0],
         "nitrogen_dioxide": [4.1, None],
         "ozone": [55.0, 56.0],
+    },
+}
+
+WEATHER_PAYLOAD = {
+    "latitude": 21.0,
+    "longitude": 105.8,
+    "timezone": "GMT",
+    "hourly": {
+        "time": ["2026-07-27T00:00", "2026-07-27T01:00"],
+        "temperature_2m": [29.0, 28.5],
+        "relative_humidity_2m": [70.0, 72.0],
+        "precipitation": [0.0, 1.2],
+        "wind_speed_10m": [8.0, 7.5],
+        "wind_direction_10m": [180.0, 190.0],
     },
 }
 
@@ -77,3 +93,20 @@ def test_normalizer_rejects_misaligned_arrays() -> None:
             city_key="da_nang",
             payload=invalid_payload,
         )
+
+
+def test_weather_client_and_normalizer() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).startswith(WEATHER_URL)
+        assert request.url.params["timezone"] == "GMT"
+        return httpx.Response(200, json=WEATHER_PAYLOAD)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = OpenMeteoClient(http_client=http_client)
+        payload = client.fetch_weather(CITIES["hanoi"], date(2026, 7, 27))
+
+    records = normalize_weather("hanoi", payload)
+    assert len(records) == 2
+    assert records[0].temperature_2m == 29.0
+    assert records[1].precipitation == 1.2
+    assert records[0].observed_at_utc == datetime(2026, 7, 27, tzinfo=UTC)

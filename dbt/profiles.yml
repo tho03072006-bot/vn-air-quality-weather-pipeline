@@ -1,0 +1,8 @@
+vn_air_quality_weather:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', '../data/warehouse/vn_air_quality_weather.duckdb') }}"
+      schema: analytics
+      threads: 4
