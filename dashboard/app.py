@@ -5,7 +5,16 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from dashboard.data_access import load_coverage, load_filter_options, load_hourly_mart
+try:
+    from dashboard.data_access import (
+        load_coverage,
+        load_filter_options,
+        load_hourly_mart,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "dashboard":
+        raise
+    from data_access import load_coverage, load_filter_options, load_hourly_mart
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = Path(
