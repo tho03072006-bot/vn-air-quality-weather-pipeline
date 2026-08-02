@@ -4,9 +4,10 @@
 
 .DESCRIPTION
     Ruff format check, Ruff lint, pytest with coverage, compileall for the
-    Airflow DAG and dashboard, a deterministic demo warehouse, and dbt build.
-    No real API call and no AWS call is made, so this is safe to run at any
-    time. Stops at the first failing gate and reports which one failed.
+    Airflow DAG and dashboard, a deterministic demo warehouse, dbt build, and
+    dbt source freshness. No real API call and no AWS call is made, so this is
+    safe to run at any time. Stops at the first failing gate and reports which
+    one failed.
 
 .EXAMPLE
     .\.venv\Scripts\Activate.ps1
@@ -19,7 +20,8 @@
 [CmdletBinding()]
 param(
     [switch]$UseRealWarehouse,
-    [switch]$SkipDbt
+    [switch]$SkipDbt,
+    [switch]$SkipFreshness
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,6 +71,11 @@ try {
 
         $env:DUCKDB_PATH = (Resolve-Path $databasePath).Path
         Invoke-Gate 'dbt build' { dbt build --project-dir dbt --profiles-dir dbt }
+        if (-not $SkipFreshness) {
+            Invoke-Gate 'dbt source freshness' {
+                dbt source freshness --project-dir dbt --profiles-dir dbt
+            }
+        }
     }
 
     Write-Host ""

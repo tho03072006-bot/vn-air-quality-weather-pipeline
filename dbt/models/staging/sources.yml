@@ -6,7 +6,15 @@ sources:
     description: Incremental dlt tables loaded from immutable API responses.
     tables:
       - name: weather_hourly
+        loaded_at_field: observed_at_utc
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
       - name: air_quality_hourly
+        loaded_at_field: observed_at_utc
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
       - name: pipeline_runs
         description: One row per pipeline execution, written by the loader after each merge.
         loaded_at_field: finished_at_utc

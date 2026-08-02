@@ -66,7 +66,9 @@ One command runs every gate. It calls no real API and no AWS endpoint:
 
 The script stops at the first failure and names the gate that broke. Add
 `-UseRealWarehouse` to build dbt against the real DuckDB file instead of the
-demo fixture, or `-SkipDbt` to run only the Python gates.
+demo fixture, `-SkipDbt` to run only the Python gates, or `-SkipFreshness` to
+skip only the freshness check. Freshness remains enabled for a real warehouse
+by default, so stale production-like data fails verification as intended.
 
 The individual steps, if you prefer to run them by hand:
 
@@ -79,6 +81,7 @@ python scripts\build_demo_warehouse.py `
     --database data\warehouse\demo.duckdb
 $env:DUCKDB_PATH = (Resolve-Path "data\warehouse\demo.duckdb")
 dbt build --project-dir dbt --profiles-dir dbt
+dbt source freshness --project-dir dbt --profiles-dir dbt
 ```
 
 ## Dashboard
@@ -124,7 +127,8 @@ modeled-source caveat) are listed in
 
 Every run merges one row into `raw.pipeline_runs` keyed on `run_id + data_date`,
 surfaced as `analytics.fct_pipeline_run` with duration, per-source row counts
-and `is_latest_run_for_date`. dbt source freshness warns after 36 hours and
+and `is_latest_run_for_date`. The verification and CI gates check freshness for
+the weather, air-quality and run-audit sources; each warns after 36 hours and
 errors after 72.
 
 ## Airflow 3 with Docker Compose

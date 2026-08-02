@@ -30,6 +30,10 @@ jobs:
         env:
           DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
         run: dbt build --project-dir dbt --profiles-dir dbt
+      - name: Check dbt source freshness
+        env:
+          DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
+        run: dbt source freshness --project-dir dbt --profiles-dir dbt
       - name: Generate dbt docs
         env:
           DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
