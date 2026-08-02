@@ -8,7 +8,9 @@ from vn_air_quality_weather.models import ModeledAirQualityHourly, WeatherHourly
 
 
 def test_rerun_does_not_duplicate_natural_keys(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DLT_DATA_DIR", str(tmp_path / "dlt-state"))
+    # dlt adds several nested package names, so keep its state outside the
+    # already descriptive test directory to stay below Windows MAX_PATH.
+    monkeypatch.setenv("DLT_DATA_DIR", str(tmp_path.parent / "dlt-state"))
     database_path = tmp_path / "warehouse.duckdb"
     weather = [
         WeatherHourly(

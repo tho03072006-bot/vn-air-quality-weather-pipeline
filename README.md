@@ -141,7 +141,9 @@ docker compose -f airflow\docker-compose.yml up -d
 
 Open http://localhost:8080. The DAG uses its Airflow data interval instead of
 `datetime.now()` and supports catchup/backfill. This Compose deployment is a
-learning/local configuration, not a production security baseline.
+learning/local configuration, not a production security baseline. A terminal
+task failure emits one `airflow_task_failure` log record with DAG, task, run,
+data-interval and exception fields for alerting and diagnosis.
 
 ## AWS S3
 

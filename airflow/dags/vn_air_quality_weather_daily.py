@@ -5,6 +5,7 @@ from pathlib import Path
 import pendulum
 from airflow.sdk import dag, get_current_context, task
 
+from vn_air_quality_weather.airflow_callbacks import log_task_failure
 from vn_air_quality_weather.pipeline import run_day, run_dbt_build
 from vn_air_quality_weather.settings import Settings
 
@@ -15,7 +16,11 @@ from vn_air_quality_weather.settings import Settings
     start_date=pendulum.datetime(2026, 7, 1, tz="UTC"),
     catchup=True,
     max_active_runs=1,
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
+    default_args={
+        "retries": 2,
+        "retry_delay": timedelta(minutes=5),
+        "on_failure_callback": log_task_failure,
+    },
     tags=["air-quality", "weather", "vietnam"],
 )
 def vn_air_quality_weather_daily():
