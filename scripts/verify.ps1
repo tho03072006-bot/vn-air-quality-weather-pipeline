@@ -26,6 +26,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+$Python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
+$Dbt = Join-Path $ProjectRoot '.venv\Scripts\dbt.exe'
+
+if (-not (Test-Path -LiteralPath $Python)) {
+    throw "Virtual environment not found at $Python. Create .venv and install .[dev] first."
+}
+if (-not $SkipDbt -and -not (Test-Path -LiteralPath $Dbt)) {
+    throw "dbt executable not found at $Dbt. Install the project dev dependencies first."
+}
+
 Push-Location $ProjectRoot
 
 $failed = @()
@@ -49,10 +59,12 @@ function Invoke-Gate {
 }
 
 try {
-    Invoke-Gate 'ruff format --check' { python -m ruff format --check . }
-    Invoke-Gate 'ruff check' { python -m ruff check . }
-    Invoke-Gate 'pytest' { python -m pytest }
-    Invoke-Gate 'compileall' { python -m compileall -q airflow/dags dashboard }
+    Invoke-Gate 'ruff format --check' { & $Python -m ruff format --check . }
+    Invoke-Gate 'ruff check' { & $Python -m ruff check . }
+    Invoke-Gate 'pytest' { & $Python -m pytest }
+    Invoke-Gate 'compileall' {
+        & $Python -m compileall -q src dashboard airflow/dags scripts
+    }
 
     if (-not $SkipDbt) {
         if ($UseRealWarehouse) {
@@ -65,15 +77,16 @@ try {
             $databasePath = Join-Path $ProjectRoot 'data/warehouse/verify.duckdb'
             if (Test-Path $databasePath) { Remove-Item $databasePath -Force }
             Invoke-Gate 'build demo warehouse' {
-                python scripts/build_demo_warehouse.py --database $databasePath
+                & $Python scripts/build_demo_warehouse.py --database $databasePath
             }
         }
 
         $env:DUCKDB_PATH = (Resolve-Path $databasePath).Path
-        Invoke-Gate 'dbt build' { dbt build --project-dir dbt --profiles-dir dbt }
+        Invoke-Gate 'dbt build' { & $Dbt build --project-dir dbt --profiles-dir dbt }
+        Invoke-Gate 'Streamlit AppTest' { & $Python scripts/verify_streamlit.py }
         if (-not $SkipFreshness) {
             Invoke-Gate 'dbt source freshness' {
-                dbt source freshness --project-dir dbt --profiles-dir dbt
+                & $Dbt source freshness --project-dir dbt --profiles-dir dbt
             }
         }
     }

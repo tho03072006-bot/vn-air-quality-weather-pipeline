@@ -1,3 +1,19 @@
+-- Provider-flagged measurements are excluded from the published concentration
+-- rather than averaged into it. A flag means the provider itself does not stand
+-- behind the reading, so letting it into an official-looking mart -- and from
+-- there into the VN_AQI models and the dashboard -- publishes a number its own
+-- source doubts. The previous version computed flagged_measurement_count and
+-- then reported it without acting on it, so the count documented an exclusion
+-- that never happened.
+--
+-- Excluding is a decision, not a deletion: the withheld count is published beside
+-- the value, and the rows themselves stay queryable in fct_air_quality_hourly and
+-- in mart_flagged_measurement_quarantine.
+--
+-- An hour whose only readings are flagged has no publishable value, so it is
+-- dropped rather than surfaced as a NULL concentration that coverage would still
+-- count as data. Downstream that becomes a gap, which int_city_pollutant_hourly
+-- already models correctly for the Nowcast window.
 with air_quality as (
     select
         city_key,
@@ -6,12 +22,15 @@ with air_quality as (
         unit,
         source_name,
         source_type,
-        avg(concentration) as concentration,
-        count(distinct station_id) as station_count,
-        sum(case when flagged then 1 else 0 end) as flagged_measurement_count
+        avg(case when not flagged then concentration end) as concentration,
+        count(distinct case when not flagged then station_id end) as station_count,
+        count(case when not flagged then 1 end) as included_measurement_count,
+        count(case when flagged then 1 end) as excluded_flagged_count
     from {{ ref('fct_air_quality_hourly') }}
     group by 1, 2, 3, 4, 5, 6
+    having count(case when not flagged then 1 end) > 0
 ),
+
 weather as (
     select
         city_key,
@@ -24,6 +43,7 @@ weather as (
     from {{ ref('fct_weather_hourly') }}
     group by 1, 2
 )
+
 select
     air_quality.*,
     weather.temperature_2m_c,

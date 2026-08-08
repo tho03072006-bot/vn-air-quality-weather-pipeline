@@ -7,7 +7,7 @@ from airflow.sdk import dag, get_current_context, task
 
 from vn_air_quality_weather.airflow_callbacks import log_task_failure
 from vn_air_quality_weather.pipeline import run_day, run_dbt_build
-from vn_air_quality_weather.settings import Settings
+from vn_air_quality_weather.settings import WAREHOUSE_WRITER_POOL, Settings
 
 
 @dag(
@@ -35,7 +35,7 @@ def vn_air_quality_weather_daily():
             "duckdb_path": str(settings.duckdb_path),
         }
 
-    @task(execution_timeout=timedelta(minutes=45))
+    @task(execution_timeout=timedelta(minutes=45), pool=WAREHOUSE_WRITER_POOL)
     def extract_store_and_load(_: dict[str, str]) -> dict[str, object]:
         context = get_current_context()
         data_interval_start = context["data_interval_start"]
@@ -50,7 +50,7 @@ def vn_air_quality_weather_daily():
         result["load_summary"]["database_path"] = str(summary.load_summary.database_path)
         return result
 
-    @task(execution_timeout=timedelta(minutes=20))
+    @task(execution_timeout=timedelta(minutes=20), pool=WAREHOUSE_WRITER_POOL)
     def build_analytics(summary: dict[str, object]) -> dict[str, object]:
         settings = Settings()
         run_dbt_build(settings.duckdb_path, project_root=Path("/opt/project"))

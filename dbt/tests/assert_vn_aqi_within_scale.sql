@@ -17,7 +17,7 @@ select
     'mart_city_aqi_daily',
     city_key,
     source_type,
-    cast(data_date_utc as varchar),
+    cast(data_date_vn as varchar),
     aqi_daily,
     category_vi
 from {{ ref('mart_city_aqi_daily') }}

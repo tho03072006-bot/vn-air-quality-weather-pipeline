@@ -18,11 +18,12 @@ dependencies = [
     "httpx>=0.28,<1",
     "pandas>=2.3,<3",
     "pydantic-settings>=2.14,<3",
-    "streamlit>=1.49,<2",
+    "streamlit>=1.60,<1.61",
 ]
 
 [project.scripts]
 vn-air-pipeline = "vn_air_quality_weather.pipeline:main"
+vn-air-forecast = "vn_air_quality_weather.forecast_pipeline:main"
 
 [project.optional-dependencies]
 dev = [

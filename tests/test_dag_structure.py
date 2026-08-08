@@ -1,0 +1,92 @@
+"""Static checks on the DAG files.
+
+Airflow is not a project dependency -- it exists only in the container image -- so
+these parse the DAG source instead of importing it. That is a real limitation: it
+verifies the declarations, not that Airflow accepts them. The DagBag import test
+run inside the Airflow image covers the other half.
+"""
+
+import ast
+from pathlib import Path
+
+import pytest
+
+from vn_air_quality_weather.settings import WAREHOUSE_WRITER_POOL
+
+DAG_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
+# Tasks that open the DuckDB file or shell out to dbt. DuckDB serialises writers,
+# so each of these has to hold the single-slot pool or two DAGs can collide.
+WAREHOUSE_WRITING_TASKS = {
+    "vn_air_quality_weather_daily.py": {"extract_store_and_load", "build_analytics"},
+    "vn_air_quality_weather_forecast.py": {"ingest_forecast", "build_analytics"},
+}
+
+
+def _task_pools(dag_path: Path) -> dict[str, str | None]:
+    """Map each @task-decorated function to the pool it declares, if any."""
+
+    tree = ast.parse(dag_path.read_text(encoding="utf-8"))
+    pools: dict[str, str | None] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            is_bare_task = isinstance(decorator, ast.Name) and decorator.id == "task"
+            is_called_task = (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Name)
+                and decorator.func.id == "task"
+            )
+            if not (is_bare_task or is_called_task):
+                continue
+            pool: str | None = None
+            if is_called_task:
+                for keyword in decorator.keywords:
+                    if keyword.arg == "pool":
+                        # The DAGs reference the shared constant rather than a
+                        # literal, so resolve the name back to its value.
+                        if isinstance(keyword.value, ast.Name):
+                            pool = WAREHOUSE_WRITER_POOL
+                        elif isinstance(keyword.value, ast.Constant):
+                            pool = str(keyword.value.value)
+            pools[node.name] = pool
+    return pools
+
+
+@pytest.mark.parametrize("dag_file", sorted(WAREHOUSE_WRITING_TASKS))
+def test_every_warehouse_writing_task_holds_the_single_writer_pool(dag_file: str) -> None:
+    pools = _task_pools(DAG_DIR / dag_file)
+    for task_name in WAREHOUSE_WRITING_TASKS[dag_file]:
+        assert task_name in pools, f"{dag_file} no longer defines {task_name}"
+        assert pools[task_name] == WAREHOUSE_WRITER_POOL, (
+            f"{dag_file}:{task_name} writes the warehouse without the "
+            f"{WAREHOUSE_WRITER_POOL} pool, so it can run concurrently with the "
+            "other DAG and hit a DuckDB write lock"
+        )
+
+
+@pytest.mark.parametrize("dag_file", sorted(WAREHOUSE_WRITING_TASKS))
+def test_read_only_tasks_do_not_hold_the_pool(dag_file: str) -> None:
+    # Holding a one-slot pool for work that does not touch the warehouse would
+    # serialise the pipeline for no reason.
+    pools = _task_pools(DAG_DIR / dag_file)
+    for task_name, pool in pools.items():
+        if task_name in WAREHOUSE_WRITING_TASKS[dag_file]:
+            continue
+        assert pool is None, f"{dag_file}:{task_name} holds the writer pool but does not write"
+
+
+def test_the_pool_is_provisioned_by_compose() -> None:
+    # A pool referenced by a task but never created leaves the task queued forever,
+    # which looks like a hung scheduler rather than a configuration error.
+    compose = (DAG_DIR.parent / "docker-compose.yml").read_text(encoding="utf-8")
+    assert f"airflow pools set {WAREHOUSE_WRITER_POOL} 1" in compose
+
+
+def test_dags_do_not_read_wall_clock_time_for_their_data_window() -> None:
+    # A DAG that derives its window from now() cannot backfill: a run for an
+    # interval three months ago must produce what it would have produced then.
+    for dag_file in WAREHOUSE_WRITING_TASKS:
+        source = (DAG_DIR / dag_file).read_text(encoding="utf-8")
+        assert "datetime.now(" not in source, f"{dag_file} reads wall-clock time"
+        assert "date.today(" not in source, f"{dag_file} reads wall-clock time"

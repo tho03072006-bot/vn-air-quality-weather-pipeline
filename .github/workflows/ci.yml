@@ -23,13 +23,17 @@ jobs:
           python -m ruff format --check .
           python -m ruff check .
           python -m pytest
-          python -m compileall airflow/dags dashboard
+          python -m compileall -q src dashboard airflow/dags scripts
       - name: Build offline warehouse fixture
         run: python scripts/build_demo_warehouse.py --database data/warehouse/ci.duckdb
       - name: Build and test dbt models
         env:
           DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
         run: dbt build --project-dir dbt --profiles-dir dbt
+      - name: Verify every Streamlit page
+        env:
+          DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
+        run: python scripts/verify_streamlit.py
       - name: Check dbt source freshness
         env:
           DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
@@ -48,3 +52,8 @@ jobs:
         run: |
           cp .env.example .env
           docker compose -f airflow/docker-compose.yml config --quiet
+      - name: Import Airflow DAGs in the runtime image
+        run: |
+          docker compose -f airflow/docker-compose.yml build airflow-scheduler
+          docker compose -f airflow/docker-compose.yml run --rm --no-deps airflow-scheduler \
+            python -c "from airflow.models import DagBag; bag = DagBag('/opt/airflow/dags'); print('DAGS=', sorted(bag.dag_ids)); print('IMPORT_ERRORS=', bag.import_errors); assert not bag.import_errors"

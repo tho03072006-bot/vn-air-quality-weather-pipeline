@@ -5,9 +5,11 @@ from typing import Any
 import dlt
 
 from vn_air_quality_weather.models import (
+    AirQualityForecastHourly,
     ModeledAirQualityHourly,
     ObservedAirQualityHourly,
     PipelineRunAudit,
+    WeatherForecastHourly,
     WeatherHourly,
 )
 
@@ -18,6 +20,8 @@ class LoadSummary:
     weather_rows: int
     air_quality_rows: int
     database_path: Path
+    weather_forecast_rows: int = 0
+    air_quality_forecast_rows: int = 0
 
 
 def load_incremental(
@@ -27,6 +31,8 @@ def load_incremental(
     observed_air_quality: list[ObservedAirQualityHourly],
     modeled_air_quality: list[ModeledAirQualityHourly],
     pipeline_runs: list[PipelineRunAudit] | None = None,
+    weather_forecasts: list[WeatherForecastHourly] | None = None,
+    air_quality_forecasts: list[AirQualityForecastHourly] | None = None,
     pipeline_name: str = "vn_air_quality_weather",
 ) -> LoadSummary:
     """Merge a batch into DuckDB using stable natural keys."""
@@ -39,6 +45,8 @@ def load_incremental(
         *modeled_air_quality_rows(modeled_air_quality),
     ]
     run_audit_data = [_serialize_dataclass(record) for record in pipeline_runs or []]
+    weather_forecast_data = [_serialize_dataclass(record) for record in weather_forecasts or []]
+    air_quality_forecast_data = air_quality_forecast_rows(air_quality_forecasts or [])
 
     pipeline = dlt.pipeline(
         pipeline_name=pipeline_name,
@@ -85,6 +93,35 @@ def load_incremental(
                 write_disposition="merge",
             )
         )
+    if weather_forecast_data:
+        resources.append(
+            dlt.resource(
+                weather_forecast_data,
+                name="weather_forecast_hourly",
+                primary_key=[
+                    "location_key",
+                    "forecast_issued_at_utc",
+                    "valid_at_utc",
+                    "source_name",
+                ],
+                write_disposition="merge",
+            )
+        )
+    if air_quality_forecast_data:
+        resources.append(
+            dlt.resource(
+                air_quality_forecast_data,
+                name="air_quality_forecast_hourly",
+                primary_key=[
+                    "location_key",
+                    "forecast_issued_at_utc",
+                    "valid_at_utc",
+                    "pollutant",
+                    "source_name",
+                ],
+                write_disposition="merge",
+            )
+        )
     if not resources:
         return LoadSummary((), 0, 0, database_path)
 
@@ -94,6 +131,8 @@ def load_incremental(
         weather_rows=len(weather_data),
         air_quality_rows=len(air_quality_data),
         database_path=database_path,
+        weather_forecast_rows=len(weather_forecast_data),
+        air_quality_forecast_rows=len(air_quality_forecast_data),
     )
 
 
@@ -127,6 +166,42 @@ def modeled_air_quality_rows(
                     "source_type": record.source_type,
                     "grid_latitude": record.grid_latitude,
                     "grid_longitude": record.grid_longitude,
+                }
+            )
+    return rows
+
+
+def air_quality_forecast_rows(
+    records: list[AirQualityForecastHourly],
+) -> list[dict[str, Any]]:
+    """Turn wide Open-Meteo payload rows into a pollutant-level forecast fact."""
+
+    rows: list[dict[str, Any]] = []
+    pollutant_fields = {
+        "pm25": "pm2_5",
+        "pm10": "pm10",
+        "no2": "nitrogen_dioxide",
+        "o3": "ozone",
+        "so2": "sulphur_dioxide",
+        "co": "carbon_monoxide",
+    }
+    for record in records:
+        record_values = _serialize_dataclass(record)
+        base_values = {
+            key: value
+            for key, value in record_values.items()
+            if key not in pollutant_fields.values()
+        }
+        for pollutant, field_name in pollutant_fields.items():
+            value = record_values[field_name]
+            if value is None:
+                continue
+            rows.append(
+                {
+                    **base_values,
+                    "pollutant": pollutant,
+                    "value": value,
+                    "unit": "µg/m³",
                 }
             )
     return rows

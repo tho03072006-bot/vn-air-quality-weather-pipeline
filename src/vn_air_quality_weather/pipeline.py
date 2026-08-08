@@ -35,11 +35,33 @@ from vn_air_quality_weather.settings import Settings, get_settings
 from vn_air_quality_weather.storage.raw_json import (
     LocalRawJsonStore,
     RawJsonStore,
+    RawWriteResult,
     S3RawJsonStore,
     build_raw_envelope,
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _RawObjectCounts:
+    """Separates objects this run wrote from ones it found already present.
+
+    The raw layer is content-addressed, so rerunning a day mostly reuses what is
+    already on disk. Counting every write call as a new object made a replay look
+    like fresh ingestion.
+    """
+
+    attempted: int = 0
+    created: int = 0
+    reused: int = 0
+
+    def record(self, result: RawWriteResult) -> None:
+        self.attempted += 1
+        if result.created:
+            self.created += 1
+        else:
+            self.reused += 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +73,8 @@ class PipelineRunSummary:
     observed_air_quality_rows: int
     modeled_air_quality_rows: int
     load_summary: LoadSummary
+    raw_objects_created: int = 0
+    raw_objects_reused: int = 0
 
 
 def run_day(
@@ -74,7 +98,7 @@ def run_day(
     weather_records: list[WeatherHourly] = []
     modeled_records: list[ModeledAirQualityHourly] = []
     observed_records: list[ObservedAirQualityHourly] = []
-    raw_objects = 0
+    raw_counts = _RawObjectCounts()
 
     with OpenMeteoClient(
         timeout_seconds=settings.http_timeout_seconds,
@@ -84,7 +108,7 @@ def run_day(
             LOGGER.info("extract source=open_meteo_weather city=%s date=%s", city.key, data_date)
             weather_payload = open_meteo.fetch_weather(city, data_date)
             weather_records.extend(normalize_weather(city.key, weather_payload))
-            raw_store.write(
+            write_result = raw_store.write(
                 source="open_meteo_weather",
                 city_key=city.key,
                 ingestion_date=ingestion_time.date(),
@@ -106,12 +130,12 @@ def run_day(
                     response=weather_payload,
                 ),
             )
-            raw_objects += 1
+            raw_counts.record(write_result)
 
             LOGGER.info("extract source=open_meteo_cams city=%s date=%s", city.key, data_date)
             modeled_payload = open_meteo.fetch_modeled_air_quality(city, data_date)
             modeled_records.extend(normalize_modeled_air_quality(city.key, modeled_payload))
-            raw_store.write(
+            write_result = raw_store.write(
                 source="open_meteo_air_quality",
                 city_key=city.key,
                 ingestion_date=ingestion_time.date(),
@@ -133,7 +157,7 @@ def run_day(
                     response=modeled_payload,
                 ),
             )
-            raw_objects += 1
+            raw_counts.record(write_result)
 
     if include_openaq:
         with OpenAQClient(
@@ -144,7 +168,7 @@ def run_day(
             for city in CITIES.values():
                 LOGGER.info("discover source=openaq city=%s", city.key)
                 locations_payload = open_aq.fetch_locations(city, settings.openaq_radius_meters)
-                raw_store.write(
+                write_result = raw_store.write(
                     source="openaq_locations",
                     city_key=city.key,
                     ingestion_date=ingestion_time.date(),
@@ -163,7 +187,7 @@ def run_day(
                         response=locations_payload,
                     ),
                 )
-                raw_objects += 1
+                raw_counts.record(write_result)
 
                 selections = select_city_sensors(city.key, locations_payload)
                 for selection in selections.values():
@@ -171,7 +195,7 @@ def run_day(
                         selection.sensor_id, interval_start, interval_end
                     )
                     observed_records.extend(normalize_sensor_hours(selection, hours_payload))
-                    raw_store.write(
+                    write_result = raw_store.write(
                         source="openaq_sensor_hours",
                         city_key=city.key,
                         ingestion_date=ingestion_time.date(),
@@ -191,7 +215,7 @@ def run_day(
                             response=hours_payload,
                         ),
                     )
-                    raw_objects += 1
+                    raw_counts.record(write_result)
 
     load_summary = load_incremental(
         database_path=settings.duckdb_path,
@@ -215,10 +239,17 @@ def run_day(
                 duration_seconds=(finished_at - ingestion_time).total_seconds(),
                 raw_backend=settings.raw_backend,
                 include_openaq=include_openaq,
-                raw_objects=raw_objects,
+                raw_objects=raw_counts.attempted,
                 weather_rows=len(weather_records),
                 observed_air_quality_rows=len(observed_records),
                 modeled_air_quality_rows=modeled_measurement_rows,
+                pipeline_name="historical",
+                status="SUCCESS",
+                requested_location_count=len(CITIES),
+                succeeded_location_count=len(CITIES),
+                failed_location_count=0,
+                raw_objects_created=raw_counts.created,
+                raw_objects_reused=raw_counts.reused,
             )
         ],
     )
@@ -232,7 +263,9 @@ def run_day(
     return PipelineRunSummary(
         data_date=data_date,
         run_id=run_id,
-        raw_objects=raw_objects,
+        raw_objects=raw_counts.attempted,
+        raw_objects_created=raw_counts.created,
+        raw_objects_reused=raw_counts.reused,
         weather_rows=len(weather_records),
         observed_air_quality_rows=len(observed_records),
         modeled_air_quality_rows=modeled_measurement_rows,

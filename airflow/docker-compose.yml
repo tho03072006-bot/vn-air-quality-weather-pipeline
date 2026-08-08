@@ -40,7 +40,16 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    command: db migrate
+    # DuckDB accepts one writer at a time. max_active_runs is per DAG, so it does
+    # not stop the historical and forecast DAGs overlapping -- the daily DAG runs
+    # with catchup enabled and allows 45 minutes to extract plus 20 to build, which
+    # is long enough to still be holding the file when a six-hourly forecast run
+    # starts. A single-slot pool is the smallest change that actually serialises
+    # every warehouse writer.
+    command: >
+      bash -c "airflow db migrate &&
+      airflow pools set warehouse_writer 1
+      'Serialises DuckDB writers: one dbt build or load at a time'"
     restart: "no"
 
   airflow-api-server:

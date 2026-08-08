@@ -47,7 +47,12 @@ class ObservedAirQualityHourly:
 
 @dataclass(frozen=True, slots=True)
 class PipelineRunAudit:
-    """One row per pipeline execution, used to prove freshness and lineage."""
+    """One row per pipeline execution, used to prove freshness and lineage.
+
+    The fields below `pipeline_version` all carry defaults so the historical
+    path keeps its existing call shape, while the forecast path can record an
+    outcome that is neither total success nor total failure.
+    """
 
     run_id: str
     data_date: date
@@ -56,8 +61,70 @@ class PipelineRunAudit:
     duration_seconds: float
     raw_backend: str
     include_openaq: bool
+    # Objects the run attempted to write. The created/reused split below says how
+    # many of those were genuinely new.
     raw_objects: int
     weather_rows: int
     observed_air_quality_rows: int
     modeled_air_quality_rows: int
     pipeline_version: str = "0.1.0"
+    pipeline_name: str = "historical"
+    # PARTIAL exists because throwing away thirty-three provinces that landed
+    # because one timed out discards work the provider has already been charged
+    # for, and leaves the warehouse looking as if nothing ran.
+    status: str = "SUCCESS"
+    requested_location_count: int = 0
+    succeeded_location_count: int = 0
+    failed_location_count: int = 0
+    # RawJsonStore.write already reports whether it wrote a new object, so
+    # counting every call as created overstates what the run produced.
+    raw_objects_created: int = 0
+    raw_objects_reused: int = 0
+    weather_forecast_rows: int = 0
+    air_quality_forecast_rows: int = 0
+    # Never populate these from a raw exception string: request URLs can carry an
+    # API key. Use the redacting helper in the forecast pipeline.
+    error_category: str = ""
+    error_summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AirQualityForecastHourly:
+    """One modeled air-quality forecast vintage for a province anchor."""
+
+    location_key: str
+    province_code: str
+    forecast_issued_at_utc: datetime
+    valid_at_utc: datetime
+    pm2_5: float | None
+    pm10: float | None
+    nitrogen_dioxide: float | None
+    ozone: float | None
+    sulphur_dioxide: float | None
+    carbon_monoxide: float | None
+    grid_latitude: float
+    grid_longitude: float
+    source_name: str = "open_meteo_cams"
+    source_type: str = "modeled"
+    resolution_note: str = "Regional model grid; not street-level monitoring"
+
+
+@dataclass(frozen=True, slots=True)
+class WeatherForecastHourly:
+    """One weather forecast vintage for a province anchor."""
+
+    location_key: str
+    province_code: str
+    forecast_issued_at_utc: datetime
+    valid_at_utc: datetime
+    temperature_2m: float | None
+    apparent_temperature: float | None
+    relative_humidity_2m: float | None
+    precipitation_probability: float | None
+    precipitation: float | None
+    wind_speed_10m: float | None
+    wind_direction_10m: float | None
+    uv_index: float | None
+    grid_latitude: float
+    grid_longitude: float
+    source_name: str = "open_meteo_forecast"

@@ -1,0 +1,35 @@
+province_code,province_key,province_name,unit_type,anchor_name,latitude,longitude,timezone_name
+01,hanoi,Hà Nội,municipality,Hà Nội,21.0278,105.8342,Asia/Ho_Chi_Minh
+04,cao_bang,Cao Bằng,province,Cao Bằng,22.6667,106.2500,Asia/Ho_Chi_Minh
+08,tuyen_quang,Tuyên Quang,province,Tuyên Quang,21.8236,105.2142,Asia/Ho_Chi_Minh
+11,dien_bien,Điện Biên,province,Điện Biên Phủ,21.3860,103.0230,Asia/Ho_Chi_Minh
+12,lai_chau,Lai Châu,province,Lai Châu,22.3864,103.4703,Asia/Ho_Chi_Minh
+14,son_la,Sơn La,province,Sơn La,21.3256,103.9188,Asia/Ho_Chi_Minh
+15,lao_cai,Lào Cai,province,Lào Cai,22.4856,103.9707,Asia/Ho_Chi_Minh
+19,thai_nguyen,Thái Nguyên,province,Thái Nguyên,21.5942,105.8482,Asia/Ho_Chi_Minh
+20,lang_son,Lạng Sơn,province,Lạng Sơn,21.8537,106.7610,Asia/Ho_Chi_Minh
+22,quang_ninh,Quảng Ninh,province,Hạ Long,20.9500,107.0734,Asia/Ho_Chi_Minh
+24,bac_ninh,Bắc Ninh,province,Bắc Ninh,21.1861,106.0763,Asia/Ho_Chi_Minh
+25,phu_tho,Phú Thọ,province,Việt Trì,21.3227,105.4019,Asia/Ho_Chi_Minh
+31,hai_phong,Hải Phòng,municipality,Hải Phòng,20.8449,106.6881,Asia/Ho_Chi_Minh
+33,hung_yen,Hưng Yên,province,Hưng Yên,20.6464,106.0511,Asia/Ho_Chi_Minh
+37,ninh_binh,Ninh Bình,province,Ninh Bình,20.2506,105.9745,Asia/Ho_Chi_Minh
+38,thanh_hoa,Thanh Hóa,province,Thanh Hóa,19.8067,105.7852,Asia/Ho_Chi_Minh
+40,nghe_an,Nghệ An,province,Vinh,18.6796,105.6813,Asia/Ho_Chi_Minh
+42,ha_tinh,Hà Tĩnh,province,Hà Tĩnh,18.3428,105.9057,Asia/Ho_Chi_Minh
+44,quang_tri,Quảng Trị,province,Đông Hà,16.8163,107.1003,Asia/Ho_Chi_Minh
+46,hue,Huế,municipality,Huế,16.4637,107.5909,Asia/Ho_Chi_Minh
+48,da_nang,Đà Nẵng,municipality,Đà Nẵng,16.0544,108.2022,Asia/Ho_Chi_Minh
+51,quang_ngai,Quảng Ngãi,province,Quảng Ngãi,15.1205,108.7923,Asia/Ho_Chi_Minh
+52,gia_lai,Gia Lai,province,Quy Nhơn,13.7820,109.2190,Asia/Ho_Chi_Minh
+56,khanh_hoa,Khánh Hòa,province,Nha Trang,12.2388,109.1967,Asia/Ho_Chi_Minh
+66,dak_lak,Đắk Lắk,province,Buôn Ma Thuột,12.6662,108.0382,Asia/Ho_Chi_Minh
+68,lam_dong,Lâm Đồng,province,Đà Lạt,11.9404,108.4583,Asia/Ho_Chi_Minh
+75,dong_nai,Đồng Nai,province,Biên Hòa,10.9574,106.8427,Asia/Ho_Chi_Minh
+79,ho_chi_minh,Hồ Chí Minh,municipality,Thành phố Hồ Chí Minh,10.8231,106.6297,Asia/Ho_Chi_Minh
+80,tay_ninh,Tây Ninh,province,Tây Ninh,11.3352,106.1099,Asia/Ho_Chi_Minh
+82,dong_thap,Đồng Tháp,province,Mỹ Tho,10.3600,106.3600,Asia/Ho_Chi_Minh
+86,vinh_long,Vĩnh Long,province,Vĩnh Long,10.2537,105.9722,Asia/Ho_Chi_Minh
+91,an_giang,An Giang,province,Rạch Giá,10.0125,105.0809,Asia/Ho_Chi_Minh
+92,can_tho,Cần Thơ,municipality,Cần Thơ,10.0452,105.7469,Asia/Ho_Chi_Minh
+96,ca_mau,Cà Mau,province,Cà Mau,9.1769,105.1500,Asia/Ho_Chi_Minh

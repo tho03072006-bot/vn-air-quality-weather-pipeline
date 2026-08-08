@@ -5,11 +5,15 @@ import pytest
 
 from vn_air_quality_weather.cities import CITIES
 from vn_air_quality_weather.clients.open_meteo import (
+    AIR_QUALITY_FORECAST_VARIABLES,
     AIR_QUALITY_URL,
+    WEATHER_FORECAST_URL,
     WEATHER_URL,
     OpenMeteoClient,
+    normalize_air_quality_forecast,
     normalize_modeled_air_quality,
     normalize_weather,
+    normalize_weather_forecast,
 )
 
 SAMPLE_PAYLOAD = {
@@ -39,6 +43,25 @@ WEATHER_PAYLOAD = {
         "precipitation": [0.0, 1.2],
         "wind_speed_10m": [8.0, 7.5],
         "wind_direction_10m": [180.0, 190.0],
+    },
+}
+
+FORECAST_AIR_PAYLOAD = {
+    **SAMPLE_PAYLOAD,
+    "hourly": {
+        **SAMPLE_PAYLOAD["hourly"],
+        "sulphur_dioxide": [2.0, 2.1],
+        "carbon_monoxide": [180.0, 181.0],
+    },
+}
+
+FORECAST_WEATHER_PAYLOAD = {
+    **WEATHER_PAYLOAD,
+    "hourly": {
+        **WEATHER_PAYLOAD["hourly"],
+        "apparent_temperature": [31.0, 30.5],
+        "precipitation_probability": [10.0, 60.0],
+        "uv_index": [0.0, 0.2],
     },
 }
 
@@ -110,3 +133,49 @@ def test_weather_client_and_normalizer() -> None:
     assert records[0].temperature_2m == 29.0
     assert records[1].precipitation == 1.2
     assert records[0].observed_at_utc == datetime(2026, 7, 27, tzinfo=UTC)
+
+
+def test_forecast_clients_request_bounded_gmt_hours() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["forecast_hours"] == "48"
+        assert request.url.params["timezone"] == "GMT"
+        if str(request.url).startswith(WEATHER_FORECAST_URL):
+            return httpx.Response(200, json=FORECAST_WEATHER_PAYLOAD)
+        assert request.url.params["hourly"] == ",".join(AIR_QUALITY_FORECAST_VARIABLES)
+        return httpx.Response(200, json=FORECAST_AIR_PAYLOAD)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = OpenMeteoClient(http_client=http_client)
+        location = CITIES["hanoi"]
+        assert client.fetch_air_quality_forecast(location, 48) == FORECAST_AIR_PAYLOAD
+        assert client.fetch_weather_forecast(location, 48) == FORECAST_WEATHER_PAYLOAD
+
+    with pytest.raises(ValueError, match="between 1 and 168"):
+        client.fetch_weather_forecast(CITIES["hanoi"], 0)
+
+
+def test_normalize_forecast_vintages() -> None:
+    issued_at = datetime(2026, 7, 26, 18, tzinfo=UTC)
+
+    air_records = normalize_air_quality_forecast("da_nang", "48", issued_at, FORECAST_AIR_PAYLOAD)
+    weather_records = normalize_weather_forecast(
+        "da_nang", "48", issued_at, FORECAST_WEATHER_PAYLOAD
+    )
+
+    assert len(air_records) == 2
+    assert air_records[0].forecast_issued_at_utc == issued_at
+    assert air_records[0].province_code == "48"
+    assert air_records[0].sulphur_dioxide == 2.0
+    assert air_records[0].source_type == "modeled"
+    assert weather_records[1].precipitation_probability == 60.0
+    assert weather_records[1].apparent_temperature == 30.5
+
+
+def test_forecast_normalizer_requires_aware_issue_time() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        normalize_air_quality_forecast(
+            "hanoi",
+            "01",
+            datetime(2026, 7, 26, 18),
+            FORECAST_AIR_PAYLOAD,
+        )

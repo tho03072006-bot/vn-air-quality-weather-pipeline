@@ -15,7 +15,12 @@ def test_settings_accepts_explicit_api_key() -> None:
     assert "unit-test-key" not in repr(settings.openaq_api_key)
 
 
-def test_default_duckdb_path() -> None:
+def test_default_duckdb_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # _env_file=None only stops the .env file being read; pydantic-settings still
+    # honours the process environment. The README tells the reader to export
+    # DUCKDB_PATH before launching the dashboard, so without clearing it here this
+    # test failed for anyone who ran pytest in that same shell.
+    monkeypatch.delenv("DUCKDB_PATH", raising=False)
     settings = Settings(
         _env_file=None,
         openaq_api_key="unit-test-key",

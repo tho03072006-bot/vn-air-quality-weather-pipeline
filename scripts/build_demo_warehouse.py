@@ -11,19 +11,37 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from vn_air_quality_weather.cities import CITIES
+from vn_air_quality_weather.geography import PROVINCES
 from vn_air_quality_weather.loaders.duckdb_loader import load_incremental
 from vn_air_quality_weather.models import (
+    AirQualityForecastHourly,
     ModeledAirQualityHourly,
     ObservedAirQualityHourly,
     PipelineRunAudit,
+    WeatherForecastHourly,
     WeatherHourly,
 )
 
 DEMO_DAY_COUNT = 3
+# Anchor positions whose newest forecast batch is deliberately incomplete, so the
+# fixture reproduces the partial-refresh state that mixed-vintage tests need.
+PARTIAL_POLLUTANT_ANCHOR_INDEX = 0
+STALE_WEATHER_ANCHOR_INDEX = 1
+FORECAST_VINTAGE_GAP_HOURS = 6
 OBSERVED_STATIONS = {
     "hanoi": ("1001", "Demo Hanoi station", {"pm25": 2001, "pm10": 2002, "o3": 2003}),
     "ho_chi_minh": ("1002", "Demo HCMC station", {"pm25": 2004}),
 }
+# A second Hanoi station reporting a suspect PM2.5 value for one hour each day.
+# It gives that city/hour grain both a flagged and an unflagged reading, which is
+# the only case where excluding flagged data actually moves the published average.
+# The all-flagged hours produced by FLAGGED_HOUR below merely make a grain vanish,
+# so on their own they cannot tell a mart that excludes flagged readings apart
+# from one that averages them in.
+CO_LOCATED_STATION = ("1003", "Demo Hanoi roadside station", 2005)
+CO_LOCATED_CITY_KEY = "hanoi"
+CO_LOCATED_FLAGGED_HOUR = 10
+FLAGGED_HOUR = 23
 
 
 def default_start_date(today: date | None = None) -> date:
@@ -49,6 +67,8 @@ def build_demo(
     weather: list[WeatherHourly] = []
     modeled: list[ModeledAirQualityHourly] = []
     observed: list[ObservedAirQualityHourly] = []
+    air_quality_forecasts: list[AirQualityForecastHourly] = []
+    weather_forecasts: list[WeatherForecastHourly] = []
     runs: list[PipelineRunAudit] = []
 
     for day_index in range(day_count):
@@ -96,6 +116,25 @@ def build_demo(
                     )
                 )
 
+                if city.key == CO_LOCATED_CITY_KEY and hour == CO_LOCATED_FLAGGED_HOUR:
+                    co_station_id, co_station_name, co_sensor_id = CO_LOCATED_STATION
+                    observed.append(
+                        ObservedAirQualityHourly(
+                            city_key=city.key,
+                            station_id=co_station_id,
+                            station_name=co_station_name,
+                            sensor_id=co_sensor_id,
+                            pollutant="pm25",
+                            unit="µg/m³",
+                            # Far from the healthy station on purpose, so that
+                            # including it would visibly move the average instead
+                            # of disappearing into rounding.
+                            observed_at_utc=timestamp,
+                            value=round(pm25 * 6.0, 2),
+                            flagged=True,
+                        )
+                    )
+
                 station = OBSERVED_STATIONS.get(city.key)
                 if station is None:
                     continue
@@ -114,7 +153,7 @@ def build_demo(
                             unit="µg/m³",
                             observed_at_utc=timestamp,
                             value=_observed_value(pollutant, pm25, hour),
-                            flagged=hour == 23,
+                            flagged=hour == FLAGGED_HOUR,
                         )
                     )
 
@@ -126,6 +165,16 @@ def build_demo(
             for value in (record.pm2_5, record.pm10, record.nitrogen_dioxide, record.ozone)
             if value is not None
         )
+        # Per city: weather, CAMS and an OpenAQ locations call, plus one
+        # sensor-hours call for each observed sensor.
+        raw_objects = len(CITIES) * 3 + sum(
+            len(sensors) for _, _, sensors in OBSERVED_STATIONS.values()
+        )
+        # Later days reuse a growing share of the raw layer, because it is
+        # content-addressed and the fixture replays overlapping payloads. The
+        # created/reused split has to sum to attempted or the audit consistency
+        # test fails.
+        raw_objects_reused = day_index
         runs.append(
             PipelineRunAudit(
                 run_id=f"demo-{data_date.isoformat()}",
@@ -135,15 +184,151 @@ def build_demo(
                 duration_seconds=240.0,
                 raw_backend="local",
                 include_openaq=True,
-                # Per city: weather, CAMS and an OpenAQ locations call, plus one
-                # sensor-hours call for each observed sensor.
-                raw_objects=len(CITIES) * 3
-                + sum(len(sensors) for _, _, sensors in OBSERVED_STATIONS.values()),
+                raw_objects=raw_objects,
                 weather_rows=len(weather) - weather_before,
                 observed_air_quality_rows=len(observed) - observed_before,
                 modeled_air_quality_rows=modeled_measurements,
+                pipeline_name="historical",
+                status="SUCCESS",
+                requested_location_count=len(CITIES),
+                succeeded_location_count=len(CITIES),
+                failed_location_count=0,
+                raw_objects_created=raw_objects - raw_objects_reused,
+                raw_objects_reused=raw_objects_reused,
             )
         )
+
+    # Two vintages six hours apart, matching the forecast DAG cadence, so the
+    # serving mart actually has to choose one. The newer vintage is deliberately
+    # incomplete for two anchors: one loses ozone, the other loses its whole
+    # weather series. That reproduces a partially refreshed batch, which is the
+    # only state in which a serving row can straddle two model runs. Without it
+    # the vintage tests would pass no matter how the mart resolved its vintage.
+    forecast_issued_at = now.replace(minute=0, second=0, microsecond=0)
+    previous_issued_at = forecast_issued_at - timedelta(hours=FORECAST_VINTAGE_GAP_HOURS)
+
+    for issued_at in (previous_issued_at, forecast_issued_at):
+        is_current_vintage = issued_at == forecast_issued_at
+        for province_index, province in enumerate(PROVINCES.values()):
+            # Only the two anchors that exercise the mixed-vintage path carry the
+            # older batch, so the fixture stays small enough to rebuild per run.
+            carries_older_vintage = province_index in {
+                PARTIAL_POLLUTANT_ANCHOR_INDEX,
+                STALE_WEATHER_ANCHOR_INDEX,
+            }
+            if not is_current_vintage and not carries_older_vintage:
+                continue
+            drop_ozone = is_current_vintage and province_index == PARTIAL_POLLUTANT_ANCHOR_INDEX
+            drop_weather = is_current_vintage and province_index == STALE_WEATHER_ANCHOR_INDEX
+
+            for lead_hour in range(72):
+                valid_at = issued_at + timedelta(hours=lead_hour)
+                local_hour = (valid_at.hour + 7) % 24
+                rush_hour_penalty = 12.0 if local_hour in {7, 8, 17, 18} else 0.0
+                pm25 = 10.0 + province_index % 8 + rush_hour_penalty + abs(12 - local_hour) * 0.4
+                rain_probability = 65.0 if local_hour in {15, 16, 17} else 15.0
+                air_quality_forecasts.append(
+                    AirQualityForecastHourly(
+                        location_key=province.key,
+                        province_code=province.code,
+                        forecast_issued_at_utc=issued_at,
+                        valid_at_utc=valid_at,
+                        pm2_5=pm25,
+                        pm10=pm25 * 1.45,
+                        nitrogen_dioxide=8.0 + province_index % 5 + rush_hour_penalty * 0.3,
+                        ozone=None if drop_ozone else 38.0 + max(local_hour - 8, 0) * 2.0,
+                        sulphur_dioxide=3.0 + province_index % 3,
+                        carbon_monoxide=180.0 + rush_hour_penalty * 4.0,
+                        grid_latitude=province.latitude,
+                        grid_longitude=province.longitude,
+                    )
+                )
+                if drop_weather:
+                    continue
+                weather_forecasts.append(
+                    WeatherForecastHourly(
+                        location_key=province.key,
+                        province_code=province.code,
+                        forecast_issued_at_utc=issued_at,
+                        valid_at_utc=valid_at,
+                        temperature_2m=25.0 + province_index % 4 + max(6 - abs(13 - local_hour), 0),
+                        apparent_temperature=27.0
+                        + province_index % 4
+                        + max(7 - abs(13 - local_hour), 0),
+                        relative_humidity_2m=72.0 - max(8 - abs(13 - local_hour), 0),
+                        precipitation_probability=rain_probability,
+                        precipitation=1.2 if rain_probability >= 60 else 0.0,
+                        wind_speed_10m=7.0 + lead_hour % 5,
+                        wind_direction_10m=float((lead_hour * 15) % 360),
+                        uv_index=max(0.0, 8.0 - abs(12 - local_hour) * 1.3),
+                        grid_latitude=province.latitude,
+                        grid_longitude=province.longitude,
+                    )
+                )
+
+    # Audit rows for the two forecast vintages. These give the fixture a coherent
+    # explanation for its own shape: the older vintage covers only two anchors
+    # because that run partially failed, and a partially failed run is precisely
+    # what leaves the warehouse able to serve one anchor from two model runs.
+    # A location that returned a payload with a null pollutant still counts as
+    # succeeded -- incomplete content is not a failed request.
+    older_anchor_count = 2
+    older_raw_objects = older_anchor_count * 2
+    current_raw_objects = len(PROVINCES) * 2
+    current_reused = 2
+    runs.extend(
+        [
+            PipelineRunAudit(
+                run_id=f"demo-forecast-{previous_issued_at:%Y%m%dT%H%M%SZ}",
+                data_date=previous_issued_at.date(),
+                started_at_utc=previous_issued_at,
+                finished_at_utc=previous_issued_at + timedelta(minutes=6),
+                duration_seconds=360.0,
+                raw_backend="local",
+                include_openaq=False,
+                raw_objects=older_raw_objects,
+                weather_rows=0,
+                observed_air_quality_rows=0,
+                modeled_air_quality_rows=0,
+                pipeline_name="forecast",
+                status="PARTIAL",
+                requested_location_count=len(PROVINCES),
+                succeeded_location_count=older_anchor_count,
+                failed_location_count=len(PROVINCES) - older_anchor_count,
+                raw_objects_created=older_raw_objects,
+                raw_objects_reused=0,
+                weather_forecast_rows=older_anchor_count * 72,
+                air_quality_forecast_rows=older_anchor_count * 72 * 6,
+                error_category="ReadTimeout",
+                error_summary=(
+                    f"{len(PROVINCES) - older_anchor_count} location(s) failed: "
+                    "upstream read timeout"
+                ),
+            ),
+            PipelineRunAudit(
+                run_id=f"demo-forecast-{forecast_issued_at:%Y%m%dT%H%M%SZ}",
+                data_date=forecast_issued_at.date(),
+                started_at_utc=forecast_issued_at,
+                finished_at_utc=forecast_issued_at + timedelta(minutes=5),
+                duration_seconds=300.0,
+                raw_backend="local",
+                include_openaq=False,
+                raw_objects=current_raw_objects,
+                weather_rows=0,
+                observed_air_quality_rows=0,
+                modeled_air_quality_rows=0,
+                pipeline_name="forecast",
+                status="SUCCESS",
+                requested_location_count=len(PROVINCES),
+                succeeded_location_count=len(PROVINCES),
+                failed_location_count=0,
+                raw_objects_created=current_raw_objects - current_reused,
+                raw_objects_reused=current_reused,
+                weather_forecast_rows=(len(PROVINCES) - 1) * 72,
+                air_quality_forecast_rows=len(PROVINCES) * 72 * 6 - 72,
+            ),
+        ]
+    )
 
     summary = load_incremental(
         database_path=database_path,
@@ -151,11 +336,15 @@ def build_demo(
         observed_air_quality=observed,
         modeled_air_quality=modeled,
         pipeline_runs=runs,
+        weather_forecasts=weather_forecasts,
+        air_quality_forecasts=air_quality_forecasts,
         pipeline_name="vn_air_quality_weather_demo",
     )
     print(
         f"demo warehouse={summary.database_path} weather={summary.weather_rows} "
-        f"air_quality={summary.air_quality_rows} runs={len(runs)}"
+        f"air_quality={summary.air_quality_rows} "
+        f"weather_forecast={summary.weather_forecast_rows} "
+        f"air_quality_forecast={summary.air_quality_forecast_rows} runs={len(runs)}"
     )
 
 

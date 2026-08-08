@@ -1,4 +1,4 @@
--- VN_AQI ngay (AQId) per city, UTC calendar date and data source.
+-- VN_AQI ngay (AQId) per city, Vietnam business date and data source.
 --
 -- Muc 2.2.2 inputs:
 --   PM2.5 / PM10 -> 24-hour mean
@@ -6,9 +6,9 @@
 --   O3           -> the larger of the AQI from the highest 1-hour mean and the
 --                   AQI from the highest 8-hour mean, and the 8-hour branch is
 --                   dropped entirely above 400 ug/m3.
--- The decision defines the day as 01:00 to 00:00 local. Storage here is UTC by
--- contract, so the grain is the UTC calendar date; the presentation layer is
--- the only place that shifts to Asia/Ho_Chi_Minh.
+-- The decision defines the day as 01:00 to 00:00 Asia/Ho_Chi_Minh. UTC remains
+-- the timestamp storage contract; vietnam_aqi_business_date assigns the local
+-- business date by shifting the local clock back one hour before casting.
 with hourly as (
     select * from {{ ref('int_city_pollutant_hourly') }}
 ),
@@ -35,10 +35,7 @@ ozone_daily as (
         city_key,
         source_name,
         source_type,
-        -- Casting TIMESTAMPTZ to DATE uses the session TimeZone, which is the
-        -- machine zone by default. The explicit AT TIME ZONE keeps the grain on
-        -- the UTC calendar on a developer laptop in Asia/Ho_Chi_Minh as well.
-        cast(observed_at_utc at time zone 'UTC' as date) as data_date_utc,
+        {{ vietnam_aqi_business_date('observed_at_utc') }} as data_date_vn,
         -- At least six of the eight hours must be present for the mean to count.
         max(case when hours_in_window >= 6 then mean_8h end) as o3_max_8h
     from ozone_rolling
@@ -50,10 +47,7 @@ daily_inputs as (
         city_key,
         source_name,
         source_type,
-        -- Casting TIMESTAMPTZ to DATE uses the session TimeZone, which is the
-        -- machine zone by default. The explicit AT TIME ZONE keeps the grain on
-        -- the UTC calendar on a developer laptop in Asia/Ho_Chi_Minh as well.
-        cast(observed_at_utc at time zone 'UTC' as date) as data_date_utc,
+        {{ vietnam_aqi_business_date('observed_at_utc') }} as data_date_vn,
         avg(case when pollutant = 'pm25' then concentration end) as pm25_mean_24h,
         avg(case when pollutant = 'pm10' then concentration end) as pm10_mean_24h,
         max(case when pollutant = 'no2' then concentration end) as no2_max_1h,
@@ -75,27 +69,27 @@ joined as (
         on daily_inputs.city_key = ozone_daily.city_key
         and daily_inputs.source_name = ozone_daily.source_name
         and daily_inputs.source_type = ozone_daily.source_type
-        and daily_inputs.data_date_utc = ozone_daily.data_date_utc
+        and daily_inputs.data_date_vn = ozone_daily.data_date_vn
 ),
 
 components as (
-    select city_key, source_name, source_type, data_date_utc,
+    select city_key, source_name, source_type, data_date_vn,
         'pm25' as pollutant, 'pm25' as aqi_scale_key, pm25_mean_24h as aqi_input
     from joined
     union all
-    select city_key, source_name, source_type, data_date_utc,
+    select city_key, source_name, source_type, data_date_vn,
         'pm10', 'pm10', pm10_mean_24h
     from joined
     union all
-    select city_key, source_name, source_type, data_date_utc,
+    select city_key, source_name, source_type, data_date_vn,
         'no2', 'no2', no2_max_1h
     from joined
     union all
-    select city_key, source_name, source_type, data_date_utc,
+    select city_key, source_name, source_type, data_date_vn,
         'o3', 'o3_1h', o3_max_1h
     from joined
     union all
-    select city_key, source_name, source_type, data_date_utc,
+    select city_key, source_name, source_type, data_date_vn,
         'o3', 'o3_8h', case when o3_max_8h > 400 then null else o3_max_8h end
     from joined
 ),
@@ -105,7 +99,7 @@ scored as (
         components.city_key,
         components.source_name,
         components.source_type,
-        components.data_date_utc,
+        components.data_date_vn,
         components.pollutant,
         {{ vn_aqi_value('components.aqi_input') }} as aqi_component
     from components
@@ -118,7 +112,7 @@ per_pollutant as (
         city_key,
         source_name,
         source_type,
-        data_date_utc,
+        data_date_vn,
         max(case when pollutant = 'pm25' then aqi_component end) as aqi_pm25,
         max(case when pollutant = 'pm10' then aqi_component end) as aqi_pm10,
         max(case when pollutant = 'no2' then aqi_component end) as aqi_no2,
@@ -151,14 +145,19 @@ labelled as (
         on per_pollutant.city_key = joined.city_key
         and per_pollutant.source_name = joined.source_name
         and per_pollutant.source_type = joined.source_type
-        and per_pollutant.data_date_utc = joined.data_date_utc
+        and per_pollutant.data_date_vn = joined.data_date_vn
 )
 
 select
     labelled.city_key,
     labelled.source_name,
     labelled.source_type,
-    labelled.data_date_utc,
+    -- One name for one meaning. This column previously shipped twice, as
+    -- data_date_local and as data_date_utc, both holding the same Vietnam
+    -- business date. The _utc name was the dangerous one: a consumer joining it
+    -- to mart_data_coverage.data_date_utc, which is a genuine UTC date, silently
+    -- compared two windows seven hours apart and got no error for it.
+    labelled.data_date_vn,
     labelled.aqi_daily,
     labelled.dominant_pollutant,
     labelled.aqi_pm25,

@@ -1,6 +1,9 @@
 select
     city_key,
-    cast(observed_at_utc as date) as data_date_utc,
+    -- AT TIME ZONE 'UTC' rather than a bare cast: casting a TIMESTAMPTZ straight
+    -- to DATE follows the DuckDB session TimeZone, so the same model produced a
+    -- different day boundary depending on who ran it.
+    cast(observed_at_utc at time zone 'UTC' as date) as data_date_utc,
     pollutant,
     unit,
     source_name,

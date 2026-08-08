@@ -7,6 +7,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from vn_air_quality_weather.retry import RetryPolicy
 
+# Every Airflow task that writes the warehouse or runs dbt declares this pool, and
+# the pool is created with a single slot. DuckDB takes one writer at a time, and
+# max_active_runs only bounds a single DAG, so without this the historical and
+# forecast DAGs can each be inside dbt build on the same file. Defined here rather
+# than in a DAG file so the DAG structure test can assert against one constant.
+WAREHOUSE_WRITER_POOL = "warehouse_writer"
+
 
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables and .env."""
@@ -34,6 +41,16 @@ class Settings(BaseSettings):
     http_max_attempts: int = 5
     http_backoff_base_seconds: float = 0.5
     http_backoff_max_seconds: float = 30.0
+
+    # A national forecast run issues two requests per province. Kept deliberately
+    # low: Open-Meteo's free tier is rate limited, and a burst that trips the
+    # limit turns a healthy run into a partial one.
+    forecast_max_workers: int = 4
+
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_chat_id: SecretStr = SecretStr("")
+    alert_cooldown_minutes: int = 180
+    alert_max_data_age_minutes: int = 180
 
     def retry_policy(self) -> RetryPolicy:
         """Build the shared HTTP retry policy from configuration."""

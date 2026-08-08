@@ -1,11 +1,41 @@
 version: 2
 
 models:
+  - name: dim_province
+    description: The 34 province-level administrative units effective from 1 July 2025.
+    columns:
+      - name: province_code
+        data_tests: [unique, not_null]
+      - name: province_key
+        data_tests: [unique, not_null]
+      - name: unit_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['province', 'municipality']
   - name: dim_city
     description: One row per target city.
     columns:
       - name: city_key
         data_tests: [unique, not_null]
+  - name: dim_location
+    description: Extensible location registry; MVP rows are the 34 precomputed province anchors.
+    columns:
+      - name: location_key
+        data_tests: [unique, not_null]
+      - name: province_code
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_province')
+                field: province_code
+      - name: location_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['province_anchor']
   - name: dim_pollutant
     columns:
       - name: pollutant
@@ -51,13 +81,53 @@ models:
       - name: unit
         data_tests: [not_null]
   - name: mart_city_air_quality_hourly
+    description: >
+      City/hour/pollutant/source concentration built from unflagged readings only.
+      excluded_flagged_count records how many provider-flagged readings were
+      withheld; the readings themselves stay in
+      mart_flagged_measurement_quarantine.
     columns:
       - name: concentration
+        data_tests: [not_null]
+      - name: included_measurement_count
+        data_tests: [not_null]
+      - name: excluded_flagged_count
+        data_tests: [not_null]
+
+  - name: mart_flagged_measurement_quarantine
+    description: >
+      The provider-flagged readings excluded from the official mart, kept queryable
+      so the exclusion is auditable rather than indistinguishable from data loss.
+    columns:
+      - name: city_key
+        data_tests: [not_null]
+      - name: observed_at_utc
+        data_tests: [not_null]
+      - name: pollutant
         data_tests: [not_null]
   - name: mart_data_coverage
     columns:
       - name: coverage_ratio
         data_tests: [not_null]
+
+  - name: mart_current_conditions
+    description: >
+      A view, not a table, so its current_timestamp anchor is read per query.
+      as_of_utc records the clock reading that produced each row and
+      freshness_status grades the age of the forecast vintage behind it.
+    columns:
+      - name: location_key
+        data_tests: [unique, not_null]
+      - name: as_of_utc
+        data_tests: [not_null]
+      - name: forecast_age_minutes
+        data_tests: [not_null]
+      - name: freshness_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['FRESH', 'DELAYED', 'STALE']
 
   - name: dim_vn_aqi_breakpoint
     description: >
@@ -93,7 +163,10 @@ models:
         data_tests: [unique, not_null]
 
   - name: fct_pipeline_run
-    description: One row per pipeline run_id and UTC data date.
+    description: >
+      One row per pipeline run_id and UTC data date, across both the historical
+      and forecast pipelines. status distinguishes a run that landed every
+      location from one that landed only some.
     columns:
       - name: run_id
         data_tests: [not_null]
@@ -101,6 +174,70 @@ models:
         data_tests: [not_null]
       - name: finished_at_utc
         data_tests: [not_null]
+      - name: pipeline_name
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['historical', 'forecast']
+      - name: status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['SUCCESS', 'PARTIAL', 'FAILED']
+      - name: raw_objects_attempted
+        data_tests: [not_null]
+      - name: raw_objects_created
+        data_tests: [not_null]
+      - name: raw_objects_reused
+        data_tests: [not_null]
+
+  - name: fct_air_quality_forecast
+    description: Immutable modeled forecast vintages at pollutant grain.
+    columns:
+      - name: location_key
+        data_tests: [not_null]
+      - name: province_code
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_province')
+                field: province_code
+      - name: forecast_issued_at_utc
+        data_tests: [not_null]
+      - name: valid_at_utc
+        data_tests: [not_null]
+      - name: pollutant
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['pm25', 'pm10', 'no2', 'o3', 'so2', 'co']
+
+  - name: fct_weather_forecast
+    description: Immutable weather forecast vintages by location and valid hour.
+    columns:
+      - name: location_key
+        data_tests: [not_null]
+      - name: forecast_issued_at_utc
+        data_tests: [not_null]
+      - name: valid_at_utc
+        data_tests: [not_null]
+
+  - name: mart_location_hourly_forecast
+    description: Latest 72-hour modeled decision forecast for every province anchor.
+    columns:
+      - name: location_key
+        data_tests: [not_null]
+      - name: outdoor_score
+        data_tests: [not_null]
+      - name: coverage_tier
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['MODELED_ONLY']
 
   - name: mart_city_aqi_hourly
     description: VN_AQI gio per city, UTC hour and source.
@@ -121,7 +258,7 @@ models:
                 values: ['pm25', 'pm10', 'no2', 'o3']
 
   - name: mart_city_aqi_daily
-    description: VN_AQI ngay per city, UTC date and source.
+    description: VN_AQI ngay per city, 01:00-00:00 Asia/Ho_Chi_Minh business date and source.
     columns:
       - name: city_key
         data_tests:
@@ -130,7 +267,11 @@ models:
               arguments:
                 to: ref('dim_city')
                 field: city_key
-      - name: data_date_utc
+      - name: data_date_vn
+        description: >
+          Vietnam AQI business date per Quyet dinh 1459/QD-TCMT, whose index day
+          runs 01:00 to 00:00 the next day. Suffixed _vn because it is not a UTC
+          calendar date and must not be joined to a _utc column.
         data_tests: [not_null]
       - name: dominant_pollutant
         data_tests:
