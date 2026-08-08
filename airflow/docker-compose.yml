@@ -16,6 +16,13 @@ x-airflow-common: &airflow-common
     DUCKDB_PATH: /opt/project/data/warehouse/vn_air_quality_weather.duckdb
   volumes:
     - ./dags:/opt/airflow/dags
+    # src is mounted, not only baked into the image. PYTHONPATH points at
+    # /opt/project/src, and with dags/ bind-mounted while src/ came from the image
+    # the two drifted apart silently: editing a DAG took effect immediately while
+    # the library module it imported stayed at whatever the last image build
+    # contained, so a DAG could reference a module that did not exist in the
+    # container and nothing outside Airflow would notice.
+    - ../src:/opt/project/src
     - ../data:/opt/project/data
     - ../dbt:/opt/project/dbt
     - ./logs:/opt/airflow/logs
