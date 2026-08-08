@@ -10,8 +10,27 @@ Airflow data interval (UTC day)
   -> dlt merge into DuckDB raw.weather_hourly and raw.air_quality_hourly
   -> dlt merge of one audit row into raw.pipeline_runs
   -> dbt staging -> intermediate -> dimensions/facts -> analytics marts
-  -> Streamlit reads analytics marts only
+  -> Streamlit scheduled views read analytics marts
 ```
+
+The six-hour forecast path queries two Open-Meteo endpoints for the 34 province
+anchors, stores every issue time as an immutable vintage, loads wide weather and
+long pollutant facts, and refreshes current-condition and decision-window marts.
+
+The on-demand path is intentionally separate:
+
+```text
+submitted Vietnam place name or WGS84 coordinate
+  -> Open-Meteo Geocoding (place search only)
+  -> Open-Meteo weather + CAMS air-quality forecast
+  -> bounded Streamlit cache (15 minutes, maximum 128 forecast entries)
+  -> temporary joined/scored dataframe
+```
+
+It creates no raw object and writes no DuckDB row. The nearest province anchor
+is displayed only as a great-circle distance reference and is not an official
+administrative assignment. The same transparent outdoor-score formula is used
+as in `mart_location_hourly_forecast`.
 
 ## HTTP resilience
 
@@ -24,20 +43,25 @@ URL fails fast instead of consuming the retry budget.
 
 OpenAQ rows use `source_type=observed`. Open-Meteo/CAMS rows use
 `source_type=modeled`. They remain separate in facts, marts, filters, and charts.
+Custom-location results are always `source_type=modeled` and
+`coverage_tier=MODELED_ONLY`.
 
 ## Natural keys and reruns
 
 - Weather: `city_key + observed_at_utc`.
 - Air quality: `city_key + station_id + pollutant + observed_at_utc + source_name`.
+- Air-quality forecast: `location_key + forecast_issued_at_utc + valid_at_utc + pollutant + source_name`.
+- Weather forecast: `location_key + forecast_issued_at_utc + valid_at_utc + source_name`.
 - dlt uses merge disposition with these composite primary keys.
 - Raw object names contain the Airflow run ID and content hash. Identical content
   in the same run is reused; changed content creates another immutable version.
 
 ## Time contract
 
-All extraction windows and warehouse timestamps are UTC. Dashboard local-time
-labels use `Asia/Ho_Chi_Minh` (+07:00). Joins use city plus UTC hour, never an
-unqualified timestamp alone.
+All extraction windows and warehouse timestamps are UTC. Business dates and
+dashboard labels use `Asia/Ho_Chi_Minh` (+07:00). VN_AQI daily assigns the
+01:00–00:00 local window with `vietnam_aqi_business_date`. Joins use location
+plus UTC hour, never an unqualified timestamp alone.
 
 ## Model grains
 
@@ -49,7 +73,14 @@ unqualified timestamp alone.
 - `int_city_pollutant_hourly`: one city/pollutant/source at one UTC hour on a
   dense spine, carrying the Nowcast weighted mean.
 - `mart_city_aqi_hourly`: one city/source at one UTC hour.
-- `mart_city_aqi_daily`: one city/source per UTC date.
+- `mart_city_aqi_daily`: one city/source per Vietnam AQI business date.
+- `dim_province`: the 34 units effective 1 July 2025.
+- `dim_location`: one precomputed model anchor per province; extensible to cached custom locations.
+- `fct_air_quality_forecast`: one location/pollutant/issue/valid hour.
+- `fct_weather_forecast`: one location/issue/valid hour.
+- `mart_location_hourly_forecast`: latest vintage with modeled pollutants, weather and decision score.
+- `mart_current_conditions`: nearest available valid hour per province anchor.
+- `mart_outdoor_decision_window`: top five explainable hours per location in the next 72 hours.
 - `fct_pipeline_run`: one run_id per UTC data date.
 
 ## VN_AQI
@@ -69,10 +100,7 @@ collects are modelled; SO2 and CO are out of scope.
   takes the larger of the 1-hour and 8-hour sub-indices, and the 8-hour branch
   is dropped above 400 ug/m3.
 
-Documented deviations from the decision:
-
-- The decision defines the day as 01:00 to 00:00 local time. Storage here is
-  UTC by contract, so the daily grain is the UTC calendar date.
+Documented interpretation choices:
 - The decision does not state a minimum completeness for the rolling 8-hour
   ozone mean; this project requires at least six of the eight hours.
 - `is_publishable` encodes muc 2.1: without PM10 or PM2.5 the index must not be
