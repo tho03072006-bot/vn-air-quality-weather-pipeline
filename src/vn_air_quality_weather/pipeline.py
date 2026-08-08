@@ -47,9 +47,13 @@ LOGGER = logging.getLogger(__name__)
 class _RawObjectCounts:
     """Separates objects this run wrote from ones it found already present.
 
-    The raw layer is content-addressed, so rerunning a day mostly reuses what is
-    already on disk. Counting every write call as a new object made a replay look
-    like fresh ingestion.
+    Reuse is narrower than it first looks. The raw object key embeds the run_id
+    (see storage.raw_json._object_key), so a manual replay -- which mints a new
+    uuid run_id -- always writes new objects and reports created, not reused.
+    Reuse happens when the same run_id writes the same payload twice, which in
+    practice means a retried Airflow task, because there the run_id is Airflow's
+    and stays stable across attempts. That is the case worth counting separately:
+    a retry that re-fetched nothing new should not be reported as fresh ingestion.
     """
 
     attempted: int = 0

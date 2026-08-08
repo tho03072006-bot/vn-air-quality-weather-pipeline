@@ -124,9 +124,10 @@ else:
         },
     )
     st.caption(
-        "Raw tạo mới và dùng lại tách riêng vì lớp raw là content-addressed: chạy lại "
-        "một ngày phần lớn dùng lại object đã có, và đếm mọi lần ghi là 'tạo mới' làm "
-        "một lần replay trông như ingest mới."
+        "Raw tạo mới và dùng lại tách riêng. Khóa object raw có chứa run_id, nên chạy "
+        "lại thủ công (run_id mới) luôn ghi object mới và báo 'tạo mới'. 'Dùng lại' "
+        "xuất hiện khi cùng một run_id ghi lại cùng nội dung — trong thực tế là task "
+        "Airflow retry, vì ở đó run_id do Airflow cấp và giữ nguyên qua các lần thử."
     )
 
 st.caption(

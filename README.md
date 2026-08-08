@@ -174,9 +174,14 @@ anchor, not the run: whatever landed is loaded and the run is audited as
 dead run rather than a merely incomplete one. Failed anchor keys are named in
 the audit row and printed by the CLI as a ready-to-paste `--province` rerun.
 
-Raw object counts are split into attempted / created / reused. The raw layer is
-content-addressed, so replaying a day mostly reuses what is already on disk;
-counting every write as "created" made a replay look like fresh ingestion.
+Raw object counts are split into attempted / created / reused. The split is
+narrower than it sounds: the raw object key embeds the `run_id`, so a manual
+replay mints a new uuid and always writes new objects, reporting created rather
+than reused. Reuse appears when the same `run_id` writes the same payload twice,
+which in practice means a retried Airflow task, where the `run_id` is Airflow's
+and stays stable across attempts. That is the case worth distinguishing: a retry
+that re-fetched nothing should not be reported as fresh ingestion. Verified
+empirically — two manual runs of the same date both reported created 15, reused 0.
 
 `is_latest_run_for_date` is partitioned by `pipeline_name` as well as date.
 Without that the historical and forecast runs that share a date compete for one

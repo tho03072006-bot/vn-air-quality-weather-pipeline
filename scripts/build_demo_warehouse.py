@@ -170,10 +170,11 @@ def build_demo(
         raw_objects = len(CITIES) * 3 + sum(
             len(sensors) for _, _, sensors in OBSERVED_STATIONS.values()
         )
-        # Later days reuse a growing share of the raw layer, because it is
-        # content-addressed and the fixture replays overlapping payloads. The
-        # created/reused split has to sum to attempted or the audit consistency
-        # test fails.
+        # A synthetic reuse count, not a simulation of real behaviour: a real manual
+        # replay reports zero reused, because the raw object key embeds the run_id.
+        # A non-zero value here exists so the audit-consistency test exercises the
+        # created + reused = attempted invariant with reused > 0, which an all-zero
+        # fixture would never reach.
         raw_objects_reused = day_index
         runs.append(
             PipelineRunAudit(
