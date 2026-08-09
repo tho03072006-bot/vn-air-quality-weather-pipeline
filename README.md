@@ -5,6 +5,10 @@ OpenAQ data separately from modeled Open-Meteo/CAMS data, precomputes versioned
 72-hour forecasts for all 34 province-level units effective from 1 July 2025,
 builds tested DuckDB/dbt marts, and serves a Vietnamese Streamlit dashboard.
 
+**Start here if you are picking this up:** [docs/handover.md](docs/handover.md)
+records the verified state, what is deliberately not verified, and where to
+continue.
+
 ## Architecture
 
 ```text
