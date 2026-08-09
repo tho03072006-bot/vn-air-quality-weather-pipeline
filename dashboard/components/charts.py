@@ -14,11 +14,25 @@ import streamlit as st
 from dashboard.view_models import (
     PM25_REFERENCE_UGM3,
     POLLUTANT_SERIES,
+    normalise_datetimes,
     pollutant_colour,
     pollutant_label,
 )
 
 TIME_AXIS = alt.Axis(title="Giờ Việt Nam", format="%H:%M %d/%m", labelAngle=-35)
+
+
+def _chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Second line of defence for the datetime64[us] problem.
+
+    The cached loaders already normalise, but a caller can build a frame by hand
+    -- custom_location does, from dataclasses -- and the failure is silent: Vega
+    logs a console warning and draws an empty plot, so nothing server-side notices.
+    Normalising again here costs a copy and removes the whole class of bug from
+    every chart in this module.
+    """
+
+    return normalise_datetimes(frame)
 
 
 def _long_form(frame: pd.DataFrame) -> pd.DataFrame:
@@ -51,7 +65,7 @@ def pollutant_small_multiples(frame: pd.DataFrame) -> alt.Chart | None:
     other as if they shared a scale.
     """
 
-    long_form = _long_form(frame)
+    long_form = _long_form(_chart_frame(frame))
     if long_form.empty:
         return None
     present = [label for _, label in _ordered_labels(long_form)]
@@ -103,7 +117,7 @@ def pm25_timeline(frame: pd.DataFrame, *, hours: int = 24) -> alt.LayerChart | N
 
     if "pm25_ugm3" not in frame.columns:
         return None
-    window = frame.head(hours).dropna(subset=["pm25_ugm3"])
+    window = _chart_frame(frame).head(hours).dropna(subset=["pm25_ugm3"])
     if window.empty:
         return None
 
@@ -156,9 +170,11 @@ def weather_panel(frame: pd.DataFrame) -> alt.Chart | None:
     columns = [c for c in ("temperature_2m_c", "apparent_temperature_c") if c in frame.columns]
     if not columns:
         return None
-    melted = frame.melt(
-        id_vars="valid_at_local", value_vars=columns, var_name="series", value_name="celsius"
-    ).dropna(subset=["celsius"])
+    melted = (
+        _chart_frame(frame)
+        .melt(id_vars="valid_at_local", value_vars=columns, var_name="series", value_name="celsius")
+        .dropna(subset=["celsius"])
+    )
     if melted.empty:
         return None
     labels = {"temperature_2m_c": "Nhiệt độ", "apparent_temperature_c": "Cảm giác nhiệt"}
@@ -196,7 +212,7 @@ def precipitation_panel(frame: pd.DataFrame) -> alt.Chart | None:
 
     if "precipitation_probability_pct" not in frame.columns:
         return None
-    window = frame.dropna(subset=["precipitation_probability_pct"])
+    window = _chart_frame(frame).dropna(subset=["precipitation_probability_pct"])
     if window.empty:
         return None
     return (
@@ -222,7 +238,7 @@ def precipitation_panel(frame: pd.DataFrame) -> alt.Chart | None:
 def uv_panel(frame: pd.DataFrame) -> alt.Chart | None:
     if "uv_index" not in frame.columns:
         return None
-    window = frame.dropna(subset=["uv_index"])
+    window = _chart_frame(frame).dropna(subset=["uv_index"])
     if window.empty:
         return None
     return (

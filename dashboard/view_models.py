@@ -13,6 +13,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import pandas as pd
+
 # An em dash reads as "no value" without pretending to be one. "0" and "N/A" both
 # invite being mistaken for data.
 MISSING_DISPLAY = "—"
@@ -125,9 +127,21 @@ def build_metric(
     decimals: int = 1,
     help_text: str | None = None,
 ) -> MetricView:
-    rendered = format_number(value, unit=unit, decimals=decimals)
+    """Build a KPI tile, keeping the unit out of the value.
+
+    A four-column KPI row is narrow, and Streamlit truncates an overflowing metric
+    value with an ellipsis rather than wrapping it. With the unit inside the value,
+    "75.7 µg/m³" rendered as "75…" -- the number itself, the single most important
+    thing on the page, was the part that got cut. The unit moves into the label,
+    which wraps.
+    """
+
+    rendered = format_number(value, decimals=decimals)
     if rendered == MISSING_DISPLAY and help_text is None:
         help_text = "Nguồn không trả về giá trị cho giờ này."
+    # A unit that already reads as a suffix ("/100") is joined without a space.
+    if unit:
+        label = f"{label} ({unit})" if not unit.startswith("/") else f"{label} {unit}"
     return MetricView(label=label, value=rendered, help_text=help_text)
 
 
@@ -336,6 +350,30 @@ POLLUTANT_SERIES = (
 # The first PM2.5 breakpoint of Bang 2. Drawn as a reference line so a reader can
 # see whether a curve crosses it without reading values off the axis.
 PM25_REFERENCE_UGM3 = 25.0
+
+
+def normalise_datetimes(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose datetime columns are nanosecond-precision.
+
+    DuckDB hands pandas datetime64[us], and Vega cannot read the way Altair
+    serialises that unit: every timestamp arrives unparseable, so the axis domain
+    collapses to [Infinity, -Infinity] and the chart draws nothing. It fails
+    silently -- Vega logs a warning to the browser console and renders an empty
+    plot, so a server-side test that only checks the surrounding caption still
+    passes. pd.to_datetime does not fix it either; the unit has to be cast.
+
+    Timezone-aware columns keep their zone, because the pages deliberately show
+    Vietnam local time.
+    """
+
+    converted = frame.copy()
+    for column in converted.columns:
+        dtype = converted[column].dtype
+        if pd.api.types.is_datetime64_any_dtype(dtype) and getattr(dtype, "unit", None) != "ns":
+            converted[column] = converted[column].astype(
+                pd.DatetimeTZDtype(tz=dtype.tz) if getattr(dtype, "tz", None) else "datetime64[ns]"
+            )
+    return converted
 
 
 @dataclass(frozen=True, slots=True)

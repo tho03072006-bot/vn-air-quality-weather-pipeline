@@ -18,6 +18,7 @@ from dashboard.view_models import (
     format_number,
     freshness_view,
     is_missing,
+    normalise_datetimes,
 )
 
 
@@ -87,9 +88,28 @@ def test_a_metric_with_no_value_explains_itself() -> None:
 def test_a_metric_with_a_value_carries_no_apology() -> None:
     metric = build_metric("PM2.5", 18.42, unit="µg/m³")
 
-    assert metric.value == "18.4 µg/m³"
+    assert metric.value == "18.4"
     assert metric.is_available is True
     assert metric.help_text is None
+
+
+def test_the_unit_lives_in_the_label_so_the_number_is_never_truncated() -> None:
+    # Streamlit truncates an overflowing metric value with an ellipsis instead of
+    # wrapping. With the unit inside the value, a four-column row rendered
+    # "75.7 µg/m³" as "75…" and cut off the number itself. The label wraps, so the
+    # unit belongs there.
+    metric = build_metric("PM2.5 mô hình", 75.7, unit="µg/m³")
+
+    assert metric.value == "75.7"
+    assert metric.label == "PM2.5 mô hình (µg/m³)"
+    assert "…" not in metric.value
+
+
+def test_a_suffix_style_unit_is_not_bracketed() -> None:
+    metric = build_metric("Điểm phù hợp ngoài trời", 29, unit="/100", decimals=0)
+
+    assert metric.value == "29"
+    assert metric.label == "Điểm phù hợp ngoài trời /100"
 
 
 def test_highest_concentration_ignores_missing_pollutants() -> None:
@@ -113,3 +133,52 @@ def test_unknown_freshness_degrades_to_the_most_cautious_state() -> None:
     # Guessing FRESH for an unrecognised status would overstate the data.
     _, _, color = freshness_view(None, None)
     assert color == "red"
+
+
+def test_microsecond_timestamps_are_cast_to_nanoseconds() -> None:
+    # DuckDB returns datetime64[us]. Vega cannot read Altair's serialisation of
+    # that unit, so every chart built on a raw query result silently drew an empty
+    # plot: the axis domain collapsed to [Infinity, -Infinity] and only a browser
+    # console warning said so. Server-side tests that checked the surrounding
+    # caption all passed while the chart showed nothing.
+    frame = pd.DataFrame(
+        {"valid_at_local": pd.to_datetime(["2026-08-09 07:00", "2026-08-09 08:00"])}
+    ).astype({"valid_at_local": "datetime64[us]"})
+    assert frame["valid_at_local"].dtype == "datetime64[us]"
+
+    converted = normalise_datetimes(frame)
+
+    assert converted["valid_at_local"].dtype == "datetime64[ns]"
+
+
+def test_normalising_preserves_the_timezone_pages_display() -> None:
+    # The pages deliberately show Vietnam local time; stripping the zone here would
+    # shift every label by seven hours.
+    frame = pd.DataFrame(
+        {"observed_at_local": pd.to_datetime(["2026-08-09 07:00+07:00"]).as_unit("us")}
+    )
+
+    converted = normalise_datetimes(frame)
+
+    assert str(converted["observed_at_local"].dtype.tz) == "UTC+07:00"
+    assert converted["observed_at_local"].dtype.unit == "ns"
+
+
+def test_normalising_leaves_non_datetime_columns_alone() -> None:
+    frame = pd.DataFrame({"pm25_ugm3": [12.5, None], "city": ["hanoi", "hue"]})
+
+    converted = normalise_datetimes(frame)
+
+    assert converted["pm25_ugm3"].dtype == "float64"
+    assert converted["city"].tolist() == ["hanoi", "hue"]
+
+
+def test_normalising_does_not_mutate_the_caller_frame() -> None:
+    # The loaders are cached, so mutating in place would corrupt the cache entry.
+    frame = pd.DataFrame({"valid_at_local": pd.to_datetime(["2026-08-09 07:00"])}).astype(
+        {"valid_at_local": "datetime64[us]"}
+    )
+
+    normalise_datetimes(frame)
+
+    assert frame["valid_at_local"].dtype == "datetime64[us]"

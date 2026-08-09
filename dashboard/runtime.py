@@ -19,7 +19,7 @@ from dashboard.data_access import (
     load_provinces,
     relation_exists,
 )
-from dashboard.view_models import COVERAGE_LABELS, POLLUTANT_LABELS
+from dashboard.view_models import COVERAGE_LABELS, POLLUTANT_LABELS, normalise_datetimes
 from vn_air_quality_weather.clients.geocoding import OpenMeteoGeocodingClient
 from vn_air_quality_weather.clients.open_meteo import OpenMeteoClient
 from vn_air_quality_weather.on_demand import CustomLocation, fetch_on_demand_forecast
@@ -77,19 +77,24 @@ def cached_provinces(path: str) -> pd.DataFrame:
     return load_provinces(Path(path))
 
 
+# Every loader below funnels through normalise_datetimes. DuckDB returns
+# datetime64[us] and Vega cannot read Altair's serialisation of that unit, so a
+# chart built straight off a query result silently draws nothing. Fixing it here
+# rather than per chart means st.line_chart and st.area_chart -- which are also
+# Vega underneath -- are covered too.
 @st.cache_data(ttl="5m", max_entries=64)
 def cached_current(path: str, location_key: str | None = None) -> pd.DataFrame:
-    return load_current_conditions(Path(path), location_key)
+    return normalise_datetimes(load_current_conditions(Path(path), location_key))
 
 
 @st.cache_data(ttl="5m", max_entries=128)
 def cached_forecast(path: str, location_key: str, hours: int = 72) -> pd.DataFrame:
-    return load_location_forecast(Path(path), location_key, hours)
+    return normalise_datetimes(load_location_forecast(Path(path), location_key, hours))
 
 
 @st.cache_data(ttl="5m", max_entries=128)
 def cached_windows(path: str, location_key: str, limit: int = 5) -> pd.DataFrame:
-    return load_decision_windows(Path(path), location_key, limit)
+    return normalise_datetimes(load_decision_windows(Path(path), location_key, limit))
 
 
 @st.cache_data(ttl="5m", max_entries=4)

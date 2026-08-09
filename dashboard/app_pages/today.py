@@ -70,7 +70,7 @@ with st.container(border=True):
 # confidence logic branches on these columns being null, so absence is expected.
 metric_row(
     [
-        build_metric("Điểm phù hợp ngoài trời", row.get("outdoor_score"), unit="/100", decimals=0),
+        build_metric("Điểm ngoài trời", row.get("outdoor_score"), unit="/100", decimals=0),
         build_metric("PM2.5 mô hình", row.get("pm25_ugm3"), unit="µg/m³"),
         build_metric("Cảm giác nhiệt", row.get("apparent_temperature_c"), unit="°C"),
         build_metric(
