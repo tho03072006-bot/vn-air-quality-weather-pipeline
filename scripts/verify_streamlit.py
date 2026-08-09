@@ -8,10 +8,27 @@ script fails when it is missing.
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from dataclasses import dataclass, field
 
 from streamlit.testing.v1 import AppTest
+
+# What this script cannot check, recorded so nobody assumes it does.
+#
+# AppTest has no DOM and no layout engine, so two of the four defect classes found
+# by opening the app in a real browser are out of reach here:
+#
+#   * Truncated values. Streamlit clips an overflowing metric with an ellipsis;
+#     that is CSS, and the server-side value is intact.
+#   * Charts wider than their container. An Altair facet has a fixed pixel width
+#     and once measured 1021px inside a 790px column; pixel geometry does not
+#     exist in AppTest.
+#
+# Both need a browser driving the rendered page. The two below -- empty charts and
+# leaked markdown directives -- are visible in the element tree, and between them
+# they cover the two most damaging defects found so far.
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +207,72 @@ def _widget_labels(app: AppTest) -> set[str]:
 # which is the part that has to be there anyway.
 
 
+def _chart_problems(app: AppTest) -> list[str]:
+    """Assert every Vega chart on the page actually received rows.
+
+    Scope, stated precisely because it is narrower than it first looks: this catches
+    a chart handed no data. It would NOT have caught the datetime64[us] defect, where
+    the rows were present and Vega simply could not parse their timestamps -- the
+    chart drew nothing while its data was intact. That failure is covered instead by
+    test_microsecond_timestamps_are_cast_to_nanoseconds, at the point where the cast
+    happens. Verifying the rendered pixels needs a real browser, which AppTest is not.
+    """
+
+    problems: list[str] = []
+    # AppTest raises rather than returning empty when a page drew no charts at all,
+    # which is a legitimate state for Alerts, Trust and pre-submit History. The
+    # exception type is an implementation detail of the element tree, so catch
+    # broadly: a page with no charts must never fail this script.
+    try:
+        charts = list(app.get("vega_lite_chart"))
+    except Exception:  # noqa: BLE001
+        return problems
+
+    for index, element in enumerate(charts):
+        # proto.spec, not .value: a chart without an explicit key has no session
+        # state entry, and .value raises looking one up.
+        try:
+            spec = json.loads(str(element.proto.spec))
+        except (AttributeError, TypeError, ValueError):
+            problems.append(f"chart {index}: spec is not readable JSON")
+            continue
+        # Streamlit carries the rows in proto.datasets and leaves the spec holding
+        # only a reference to them, so counting the spec alone reports every chart
+        # as empty. Inline values still appear in the spec for small literal frames
+        # such as the threshold rule.
+        row_count = 0
+        for dataset in getattr(element.proto, "datasets", []) or []:
+            data = getattr(dataset, "has_parsed_data", None)
+            row_count += 1 if data is None or data else 0
+        inline = spec.get("data", {})
+        if isinstance(inline, dict) and isinstance(inline.get("values"), list):
+            row_count += len(inline["values"])
+        for values in (spec.get("datasets") or {}).values():
+            if isinstance(values, list):
+                row_count += len(values)
+        if row_count == 0:
+            problems.append(f"chart {index}: rendered with no data rows")
+    return problems
+
+
+# Streamlit's badge/colour directives are markdown. Passing st.badge a hex colour
+# does not raise -- it emits the directive unrendered, so the map legend once
+# printed ":#16a34a-badge[0-25]" as literal text where a coloured chip belonged.
+#
+# The hash is required. A named colour (":green-badge[...]") is the correct source
+# form and renders fine; only a hex colour leaks through as text. A first version of
+# this pattern made the hash optional and flagged every page in the app, which is
+# the failure mode of a check that cannot pass on correct code.
+_UNRENDERED_DIRECTIVE = re.compile(r":#[0-9a-fA-F]{3,8}-(?:badge|background)\[")
+
+
+def _directive_problems(text: str) -> list[str]:
+    leaked = sorted(set(_UNRENDERED_DIRECTIVE.findall(text)))
+    if not leaked:
+        return []
+    return [f"hex colour directive leaked as literal text: {', '.join(leaked)}"]
+
+
 def _check(app: AppTest, expectation: PageExpectation) -> list[str]:
     problems = [f"raised {exception.value}" for exception in app.exception]
     text = _page_text(app)
@@ -214,6 +297,9 @@ def _check(app: AppTest, expectation: PageExpectation) -> list[str]:
             f"expected at least {expectation.min_dataframes} data table(s), "
             f"found {len(app.dataframe)}"
         )
+
+    problems.extend(_directive_problems(text))
+    problems.extend(_chart_problems(app))
     return problems
 
 
