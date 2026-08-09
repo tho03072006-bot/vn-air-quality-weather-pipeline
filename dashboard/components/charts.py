@@ -90,12 +90,17 @@ def pollutant_small_multiples(frame: pd.DataFrame) -> alt.Chart | None:
                 alt.Tooltip("concentration:Q", title="Nồng độ", format=".1f"),
             ],
         )
-        .properties(height=150, width=260)
+        # Two columns at 240px, not three at 260px. A facet has a fixed pixel width
+        # -- it does not shrink to its container -- and three columns measured 1000px
+        # inside a 790px column, so the panel grid overflowed and the page grew a
+        # horizontal scrollbar. Two columns leave room for the axis labels at this
+        # width and still fit when the sidebar is open.
+        .properties(height=150, width=240)
         .facet(
             facet=alt.Facet(
                 "label:N", title=None, sort=present, header=alt.Header(labelFontSize=13)
             ),
-            columns=3,
+            columns=2,
         )
         # Independent y is the whole point of the redesign. Sharing it reintroduces
         # the flattening this replaced.

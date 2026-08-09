@@ -10,6 +10,7 @@ from dashboard.view_models import (
     MAP_METRICS,
     MISSING_DISPLAY,
     MISSING_RGB,
+    badge_colour,
     band_colour,
     band_for,
     build_metric,
@@ -88,10 +89,8 @@ metric_row(
 st.caption(f"**Thang màu — {metric.label}.** {metric.legend_note}")
 with st.container(horizontal=True, horizontal_alignment="left"):
     for band in metric.bands:
-        red, green, blue = band.rgb
-        st.badge(band.label, color=f"#{red:02x}{green:02x}{blue:02x}")
-    grey = "#{:02x}{:02x}{:02x}".format(*MISSING_RGB)
-    st.badge("Không có dữ liệu", color=grey, icon=":material/help:")
+        st.badge(band.label, color=badge_colour(band.rgb))
+    st.badge("Không có dữ liệu", color=badge_colour(MISSING_RGB), icon=":material/help:")
 
 layer = pdk.Layer(
     "ScatterplotLayer",

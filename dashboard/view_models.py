@@ -281,6 +281,37 @@ MAP_METRICS: tuple[MapMetric, ...] = (
 )
 
 
+# st.badge accepts only Streamlit's named colours. Passing a hex string does not
+# fail -- it emits the raw directive as literal text, so the map legend printed
+# ":#16a34a-badge[0-25]" instead of a coloured chip. The RGB stays authoritative for
+# the map fill; this maps it onto the nearest name the badge API will accept.
+_BADGE_COLOUR_ANCHORS: tuple[tuple[tuple[int, int, int], str], ...] = (
+    ((22, 163, 74), "green"),
+    ((250, 204, 21), "orange"),
+    ((249, 115, 22), "orange"),
+    ((220, 38, 38), "red"),
+    ((126, 34, 206), "violet"),
+    ((127, 29, 29), "red"),
+    ((59, 130, 246), "blue"),
+    ((147, 197, 253), "blue"),
+    ((30, 64, 175), "blue"),
+    ((226, 232, 240), "gray"),
+    ((148, 163, 184), "gray"),
+)
+
+
+def badge_colour(rgb: tuple[int, int, int]) -> str:
+    """Nearest Streamlit badge colour name for a band's RGB."""
+
+    red, green, blue = rgb
+    return min(
+        _BADGE_COLOUR_ANCHORS,
+        key=lambda anchor: (
+            (anchor[0][0] - red) ** 2 + (anchor[0][1] - green) ** 2 + (anchor[0][2] - blue) ** 2
+        ),
+    )[1]
+
+
 def band_for(value: object, metric: MapMetric) -> ColourBand | None:
     """Return the band a value falls in, or None when there is no value.
 
