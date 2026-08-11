@@ -11,7 +11,9 @@ the column carried None rather than NaN.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 
 import pandas as pd
 
@@ -132,8 +134,12 @@ def build_metric(
     A four-column KPI row is narrow, and Streamlit truncates an overflowing metric
     value with an ellipsis rather than wrapping it. With the unit inside the value,
     "75.7 µg/m³" rendered as "75…" -- the number itself, the single most important
-    thing on the page, was the part that got cut. The unit moves into the label,
-    which wraps.
+    thing on the page, was the part that got cut. The unit moves into the label.
+
+    That was originally justified by "the label wraps". It does not: Streamlit gives
+    the label `white-space: nowrap` and an ellipsis too, so three labels were still
+    being cut at 1280px until `app.py` overrode it. Keep labels short anyway -- the
+    override buys a second line, not unlimited room.
     """
 
     rendered = format_number(value, decimals=decimals)
@@ -281,37 +287,6 @@ MAP_METRICS: tuple[MapMetric, ...] = (
 )
 
 
-# st.badge accepts only Streamlit's named colours. Passing a hex string does not
-# fail -- it emits the raw directive as literal text, so the map legend printed
-# ":#16a34a-badge[0-25]" instead of a coloured chip. The RGB stays authoritative for
-# the map fill; this maps it onto the nearest name the badge API will accept.
-_BADGE_COLOUR_ANCHORS: tuple[tuple[tuple[int, int, int], str], ...] = (
-    ((22, 163, 74), "green"),
-    ((250, 204, 21), "orange"),
-    ((249, 115, 22), "orange"),
-    ((220, 38, 38), "red"),
-    ((126, 34, 206), "violet"),
-    ((127, 29, 29), "red"),
-    ((59, 130, 246), "blue"),
-    ((147, 197, 253), "blue"),
-    ((30, 64, 175), "blue"),
-    ((226, 232, 240), "gray"),
-    ((148, 163, 184), "gray"),
-)
-
-
-def badge_colour(rgb: tuple[int, int, int]) -> str:
-    """Nearest Streamlit badge colour name for a band's RGB."""
-
-    red, green, blue = rgb
-    return min(
-        _BADGE_COLOUR_ANCHORS,
-        key=lambda anchor: (
-            (anchor[0][0] - red) ** 2 + (anchor[0][1] - green) ** 2 + (anchor[0][2] - blue) ** 2
-        ),
-    )[1]
-
-
 def band_for(value: object, metric: MapMetric) -> ColourBand | None:
     """Return the band a value falls in, or None when there is no value.
 
@@ -405,6 +380,73 @@ def normalise_datetimes(frame: pd.DataFrame) -> pd.DataFrame:
                 pd.DatetimeTZDtype(tz=dtype.tz) if getattr(dtype, "tz", None) else "datetime64[ns]"
             )
     return converted
+
+
+HOURS_PER_DAY = 24
+
+
+def build_coverage(
+    frame: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+    *,
+    locations: Sequence[str] | None = None,
+    location_column: str = "Tỉnh/thành",
+    timestamp_column: str = "observed_at_utc",
+) -> pd.DataFrame:
+    """Hours present per location per UTC day, across the *whole* selected range.
+
+    The obvious implementation -- group by day and count distinct hours -- can only
+    ever describe days that have at least one row. A day with no data produces no
+    group, so it vanishes from the result, and the strip whose entire purpose is to
+    show missing data was blind to the worst case it could report. Measured against
+    the real warehouse: PM2.5 observed over 2026-07-27..2026-08-07 returned four
+    groups, all reading a full 24 hours, and the page concluded "every day in the
+    selected range has a full 24 hours" while ten of the twelve days held no rows at
+    all. Nothing raised, so nothing caught it.
+
+    Reindexing over the full date range makes an absent *day* explicit: zero hours
+    present, twenty-four missing.
+
+    The location axis has exactly the same failure mode one dimension over, and
+    deriving it from the frame does not fix it. Pass ``locations`` -- what the reader
+    actually selected -- or a location with no rows anywhere in the range is dropped
+    from the strip entirely rather than reported as empty. Measured against the real
+    warehouse on the *default* History filters (all three cities, PM2.5, observed):
+    Da Nang has no observed PM2.5 rows at all, so the frame-derived axis published a
+    coverage strip for two cities and never mentioned the third -- the one with the
+    worst coverage of the three. Falling back to the frame is kept only for callers
+    that have no selection to pass.
+    """
+
+    days = pd.date_range(start_date, end_date, freq="D").date
+    if locations is None:
+        axis = [] if frame.empty else sorted(frame[location_column].dropna().unique())
+    else:
+        axis = sorted({str(location) for location in locations})
+
+    if not axis or len(days) == 0:
+        return pd.DataFrame(
+            columns=[location_column, "data_date_utc", "hours_with_data", "missing_hours"]
+        )
+
+    grid = pd.MultiIndex.from_product([axis, days], names=[location_column, "data_date_utc"])
+    if frame.empty:
+        counted = pd.Series(0, index=grid, dtype=int)
+    else:
+        observed = pd.to_datetime(frame[timestamp_column], utc=True)
+        counted = (
+            frame.assign(data_date_utc=observed.dt.date)
+            .groupby([location_column, "data_date_utc"])[timestamp_column]
+            .nunique()
+        )
+    coverage = (
+        counted.reindex(grid, fill_value=0)
+        .reset_index(name="hours_with_data")
+        .astype({"hours_with_data": int})
+    )
+    coverage["missing_hours"] = (HOURS_PER_DAY - coverage["hours_with_data"]).clip(lower=0)
+    return coverage.sort_values([location_column, "data_date_utc"], ignore_index=True)
 
 
 @dataclass(frozen=True, slots=True)

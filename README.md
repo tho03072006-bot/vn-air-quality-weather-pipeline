@@ -121,6 +121,40 @@ python scripts\verify_streamlit.py
 dbt source freshness --project-dir dbt --profiles-dir dbt
 ```
 
+### Layout checks in a real browser
+
+`verify.ps1` is offline by contract, so the browser gate is separate. It needs a
+running server, a browser binary, and one live API call on the custom-location
+page:
+
+```powershell
+python -m pip install --editable ".[qa]"
+python -m playwright install chromium
+```
+
+Then, with the app running from the project root in another shell:
+
+```powershell
+python scripts\verify_layout.py
+```
+
+It measures nine pages at 390x844 and 1280x800 for two faults `verify_streamlit.py`
+structurally cannot see, because AppTest has no DOM and no layout engine: a chart
+drawn wider than its container, and text clipped by a CSS ellipsis. Both have
+shipped before, and the first recurred at a viewport its original fix did not cover.
+
+The contrast gate runs the same way and is also expected to fail today:
+
+```powershell
+python scripts\verify_a11y.py
+```
+
+It composites each text node's foreground against its ancestor backgrounds and
+grades the result under WCAG 2.1. It currently reports findings on every page,
+reducing to four Streamlit badge and alert colours; see section I of
+[the audit register](docs/code-audit-and-risk-register.md) for the breakdown and
+for the one correction the checker itself still needs.
+
 ## Dashboard
 
 The scheduled province views read serving marts. The optional custom-location
@@ -202,7 +236,8 @@ run-audit sources. `scripts/verify_streamlit.py` does more than execute the nine
 pages: each page declares the text, widget labels and data tables that must be
 present, plus forbidden strings such as `nan µg/m³`, and the script drives the
 forecast horizon and the map metric switch and fails unless the output actually
-changes. The custom-location page performs no network call in its initial
+changes, and it submits the history filter form and fails if the default selection
+returns no rows. The custom-location page performs no network call in its initial
 state, keeping CI deterministic. `scripts/benchmark_dashboard.py` measures
 server-side render time per page; results are recorded in
 [docs/ui-design-spec.md](docs/ui-design-spec.md).

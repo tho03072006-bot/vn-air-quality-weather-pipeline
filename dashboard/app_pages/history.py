@@ -9,7 +9,7 @@ import streamlit as st
 from dashboard.components import methodology_expander, metric_row
 from dashboard.data_access import load_filter_options, load_hourly_mart
 from dashboard.runtime import POLLUTANT_LABELS, database_path
-from dashboard.view_models import build_metric
+from dashboard.view_models import build_coverage, build_metric
 
 CITY_LABELS = {
     "hanoi": "Hà Nội",
@@ -65,9 +65,16 @@ with st.form("history_filters"):
         default=filter_options["cities"],
         format_func=lambda value: CITY_LABELS.get(value, value),
     )
+    # Default to PM2.5 rather than to pollutants[0]. The list arrives alphabetically,
+    # so the first entry is NO2 -- for which the warehouse holds no observed rows at
+    # all -- while the source control defaults to "observed". Every first visit to
+    # this page therefore submitted a combination that could only return nothing, and
+    # read as though the pipeline were broken.
+    pollutants = list(filter_options["pollutants"])
     pollutant = st.selectbox(
         "Chất ô nhiễm",
-        filter_options["pollutants"],
+        pollutants,
+        index=pollutants.index("pm25") if "pm25" in pollutants else 0,
         format_func=lambda value: POLLUTANT_LABELS.get(value, value),
     )
     source_type = st.segmented_control(
@@ -127,17 +134,28 @@ st.line_chart(
 with st.container(border=True):
     st.subheader("Độ phủ theo ngày")
     st.caption(
-        "Số giờ có dữ liệu trên 24 giờ mỗi ngày UTC. Với chuỗi quan trắc, thiếu giờ là "
-        "bình thường và phản ánh coverage của trạm; với chuỗi mô hình, thiếu giờ là bất "
-        "thường vì CAMS phủ đầy đủ về không gian."
+        "Số giờ có dữ liệu trên 24 giờ mỗi ngày UTC, tính trên toàn bộ khoảng đã chọn: "
+        "ngày hoàn toàn không có số đo được tính là 0 giờ chứ không bị bỏ khỏi biểu đồ. "
+        "Với chuỗi quan trắc, thiếu giờ là bình thường và phản ánh coverage của trạm; "
+        "với chuỗi mô hình, thiếu giờ là bất thường vì CAMS phủ đầy đủ về không gian."
     )
-    coverage = (
-        data.assign(data_date_utc=data["observed_at_utc"].dt.tz_convert("UTC").dt.date)
-        .groupby(["Tỉnh/thành", "data_date_utc"])["observed_at_utc"]
-        .nunique()
-        .reset_index(name="hours_with_data")
+    # The selected cities, not the cities that happen to have rows. A city with no
+    # rows anywhere in the range is absent from `data`, so deriving the axis from
+    # `data` drops it from the strip instead of reporting it as empty -- the same
+    # blindness as the missing-day case, one dimension over, and it fires on the
+    # default filters: Da Nang has no observed PM2.5 at all.
+    coverage = build_coverage(
+        data,
+        date_range[0],
+        date_range[1],
+        locations=[CITY_LABELS.get(city, city) for city in cities],
     )
-    coverage["missing_hours"] = (24 - coverage["hours_with_data"]).clip(lower=0)
+    empty_days = int((coverage["hours_with_data"] == 0).sum())
+    if empty_days:
+        st.warning(
+            f"{empty_days} ngày/địa điểm trong khoảng đã chọn không có số đo nào.",
+            icon=":material/event_busy:",
+        )
     st.bar_chart(
         coverage,
         x="data_date_utc",

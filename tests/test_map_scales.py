@@ -8,6 +8,12 @@ whose key disagrees with its markers is worse than one with no key at all.
 import pandas as pd
 import pytest
 
+from dashboard.a11y import contrast_ratio, parse_css_colour
+from dashboard.map_legend import (
+    MAP_LEGEND_PAGE_BACKGROUND,
+    MAP_LEGEND_SWATCH_BORDER,
+    map_legend_html,
+)
 from dashboard.view_models import (
     MAP_METRICS,
     MISSING_RGB,
@@ -100,3 +106,70 @@ def test_metric_columns_are_distinct_and_named() -> None:
     for metric in MAP_METRICS:
         assert metric.label
         assert metric.legend_note
+
+
+def _swatch_fills() -> list[tuple[str, tuple[int, int, int]]]:
+    swatches = [
+        (f"{metric.key} band {band.label!r}", band.rgb)
+        for metric in MAP_METRICS
+        for band in metric.bands
+    ]
+    swatches.append(("missing-data band", MISSING_RGB))
+    return swatches
+
+
+def test_the_swatch_border_carries_wcag_non_text_contrast() -> None:
+    """The border, not the immutable data fill, carries WCAG 1.4.11.
+
+    Asserted once, because it *is* one fact: both colours are constants. An earlier
+    version of this test looped over all 19 swatches computing this identical value
+    and discarding the fill, which read as per-swatch verification while proving
+    nothing about any individual swatch -- it would have passed with no swatches at
+    all. Per-swatch behaviour is checked against the markup below instead.
+    """
+
+    border = parse_css_colour(MAP_LEGEND_SWATCH_BORDER)
+    page = parse_css_colour(MAP_LEGEND_PAGE_BACKGROUND)
+    assert border is not None and border[3] == 1.0
+    assert page is not None and page[3] == 1.0
+    assert contrast_ratio(border[:3], page[:3]) >= 3.0
+
+
+def test_the_border_is_load_bearing_not_decoration() -> None:
+    """Most fills cannot meet 1.4.11 alone, which is why the border must stay.
+
+    Measured: 8 of 19 fills fall under 3:1 against the page, the worst being the
+    yellow band at 1.46. Deleting the border because "the colours look distinct"
+    would silently drop those below the threshold, so the dependency is pinned here.
+    """
+
+    page = parse_css_colour(MAP_LEGEND_PAGE_BACKGROUND)
+    assert page is not None
+    unaided = [name for name, fill in _swatch_fills() if contrast_ratio(fill, page[:3]) < 3.0]
+    assert len(unaided) >= 8, (
+        "fewer fills need the border than when it was introduced; if the data "
+        f"colours changed, re-derive the border requirement. Currently: {unaided}"
+    )
+
+
+def test_every_rendered_swatch_actually_carries_the_border() -> None:
+    """The per-swatch half, checked against markup rather than a constant."""
+
+    for metric in MAP_METRICS:
+        markup = map_legend_html(metric)
+        rendered = markup.count('class="map-colour-legend__swatch"')
+        # Every band plus the missing-data entry.
+        assert rendered == len(metric.bands) + 1, (
+            f"{metric.key} renders {rendered} swatches for {len(metric.bands)} bands"
+        )
+        assert f"border: 2px solid {MAP_LEGEND_SWATCH_BORDER}" in markup, (
+            f"{metric.key} swatches lost the boundary that carries WCAG 1.4.11"
+        )
+
+
+def test_map_legend_keeps_every_data_colour_exact() -> None:
+    for metric in MAP_METRICS:
+        markup = map_legend_html(metric)
+        for band in metric.bands:
+            red, green, blue = band.rgb
+            assert f"background-color: rgb({red}, {green}, {blue})" in markup

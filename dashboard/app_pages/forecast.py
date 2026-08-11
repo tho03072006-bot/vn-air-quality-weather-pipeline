@@ -5,9 +5,9 @@ import streamlit as st
 
 from dashboard.components import methodology_expander, metric_row, source_badges
 from dashboard.components.charts import (
-    pollutant_small_multiples,
     precipitation_panel,
     render,
+    render_pollutant_panels,
     uv_panel,
     weather_panel,
 )
@@ -73,8 +73,8 @@ with st.container(border=True):
         "Mỗi chất một khung riêng với trục y độc lập. Đọc hình dạng theo thời gian "
         "trong từng khung; không so sánh độ cao giữa các khung vì thang khác nhau."
     )
-    render(
-        pollutant_small_multiples(chart),
+    render_pollutant_panels(
+        chart,
         empty_message="Không có chất ô nhiễm nào đủ dữ liệu để vẽ.",
     )
 

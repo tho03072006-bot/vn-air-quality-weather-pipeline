@@ -23,6 +23,11 @@ from vn_air_quality_weather.settings import WAREHOUSE_WRITER_POOL, Settings
     default_args={
         "retries": 2,
         "retry_delay": timedelta(minutes=5),
+        # Same reasoning as the daily DAG: back off rather than retrying twice into
+        # a window that has not reopened. Capped at 30 minutes because the schedule
+        # is six-hourly -- a retry must still land well inside its own interval.
+        "retry_exponential_backoff": True,
+        "max_retry_delay": timedelta(minutes=30),
         "on_failure_callback": log_task_failure,
     },
     tags=["air-quality", "weather", "forecast", "vietnam"],

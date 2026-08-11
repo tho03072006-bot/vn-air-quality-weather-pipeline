@@ -466,6 +466,151 @@ an oversight — a queue would add moving parts for a case the flag already cove
 
 ---
 
+## H. Defects behind an interaction, found by driving the app — P1
+
+Everything below reached a user. None raised an exception, none failed a test, and
+none was visible from the page's initial render — which is why they survived 147
+unit tests and ten page assertions. They were found by submitting the History filter
+form and by entering coordinates on the custom-location page, then measuring the
+resulting DOM.
+
+| # | Defect | Why nothing caught it | Status |
+|---|---|---|---|
+| H1 | The coverage strip reported "every day in the selected range has a full 24 hours" while 10 of 12 days held no rows at all | `groupby` produces no group for a day with no rows, so a wholly missing day was invisible to the feature whose purpose is to show missing data | done — `build_coverage` reindexes over the full range; 6 tests, 3 confirmed failing on the old code |
+| H2 | The default filter (NO2 + observed) matched zero rows, so a first-time reader's first submit always read as a broken pipeline | No test submitted the form; the pre-submit prompt was all that was ever asserted | done — defaults to PM2.5; `verify_streamlit.py` now fails if the default submit returns nothing |
+| H3 | The pollutant facet grid measured 641px inside a 327px container at a 390px viewport, and nothing scrolled, so three of six panels were unreachable | AppTest has no layout engine; the Phase 3.2 fix was sized against a 790px desktop column only | done — per-pollutant charts with no pixel width; `verify_layout.py` guards it |
+| H4 | Four KPI labels were clipped by a CSS ellipsis at 1280px ("PM2.5 mô hình trung vị (µg/m³)" needed 183px in 161px) | Caused by the Phase 3.1 fix, which moved the unit into the label on the false premise that labels wrap | done — `app.py` lets metric labels wrap |
+
+H4 is worth reading alongside the KPI truncation it descends from: a fix that
+relocates a defect rather than removing it looks identical to a real fix from the
+server side, and only measurement in a browser distinguishes them.
+
+---
+
+## I. Text contrast failed WCAG AA across every page — P1, resolved
+
+**Status: done.** `verify_a11y.py` and `verify_layout.py` both report **18/18 PASS**
+(9 pages x 2 viewports) and exit 0. The sequence was 94 → 52 → 0: 42 removed by
+correcting the gate, 52 by fixing the app. The record below is kept because the
+shape of the problem, and of the fix, is the reusable part.
+
+`scripts/verify_a11y.py` was written but had never been run. Its first run against
+the real app reported **94 findings, on all 9 pages, at both 390x844 and 1280x800**.
+
+The count is misleading in both directions and neither number should be quoted
+without the breakdown:
+
+| Rendered pair | Ratio | Needs | Where it comes from | Text findings | Icon findings |
+|---|---|---|---|---|---|
+| `rgb(226,102,12)` on `rgb(249,241,230)` | **3.05** | 4.5 | Streamlit orange badge | 10 | 6 |
+| `rgb(121,123,131)` on `rgb(228,230,233)` | **3.38** | 4.5 | Streamlit gray badge | 4 | 4 |
+| `rgb(21,130,55)` on `rgb(227,244,235)` | **4.30** | 4.5 | Streamlit green badge / success alert | 10 | 8 |
+| `rgb(189,64,67)` on `rgb(249,229,231)` | **4.37** | 4.5 | Streamlit red badge / warning alert | 28 | 24 |
+
+**94 findings are 4 defects.** Every one is a Streamlit built-in badge or alert
+colour, not a colour this project chose. `.streamlit/config.toml` sets
+`primaryColor`, `backgroundColor`, `secondaryBackgroundColor` and `textColor` and
+says nothing about the semantic palette, so `st.badge(color="orange")` and
+`st.warning` render at Streamlit's defaults. Twenty call sites across six files
+consume them. Fixing the palette closes all 94; editing call sites closes none.
+
+**42 of the 94 were the checker's fault, not the app's — now fixed.** The findings
+whose text read `warning`, `radar`, `verified`, `home`, `speed`, `help` or
+`check_circle` are Material Symbols *ligature names* — the font renders them as
+glyphs, and no reader ever sees those words. They are non-text content under WCAG
+1.4.11, which requires 3:1, not the 4.5:1 the scanner applied to everything with a
+text node. The browser agreed: its accessibility tree exposes them as
+`img "warning icon"`, not as text.
+
+`dashboard/a11y.py` now carries `is_icon_font()` and `threshold_for()`, and the
+scanner records `criterion=1.4.3` or `criterion=1.4.11` on every finding.
+Discrimination is by **`font-family`**, not by a list of ligature names — a
+hardcoded list was tried first and missed `model_training` on its first run.
+
+Critically, icons are graded at 3:1 rather than skipped, so an icon that genuinely
+fails 1.4.11 is still reported; `tests/test_a11y.py` pins both sides at 2.99/3.00.
+
+Verified independently after the fix: **52 findings, all `criterion=1.4.3`, zero
+icon ligatures**, distribution matching the table above exactly. 260 unit tests
+pass. The gate still exits 1, as it should — the app is still failing.
+
+**The 52 real findings are led by the map legend.** `0–25`, `25–50`, `50–80`,
+`80–150`, `> 250` and `Không có dữ liệu` are the primary encoding of the national
+map — the one place where colour *is* the data — and all six fail, contributing 12
+of the 52. The `Chỉ có mô hình` coverage badge at 3.05 is the worst single text
+ratio in the app. Two pairs (4.30 and 4.37) miss by under 5%, which is a palette
+adjustment; two (3.05 and 3.38) are a real legibility problem at 14px.
+
+**The legend cannot be fixed by darkening the palette, and this is a trap.**
+`national_map.py` renders each band with `st.badge(band.label,
+color=badge_colour(band.rgb))`, and `badge_colour()` resolves to the *nearest
+Streamlit named colour* by Euclidean RGB distance. The map markers themselves are
+drawn by pydeck from the exact `band.rgb` and are untouched by CSS. So the legend
+chip is already an approximation of the marker it labels, and darkening Streamlit's
+palette to pass contrast widens that gap — trading a legibility defect for a
+correctness one, on the single component where colour carries the meaning.
+
+The legend needs a swatch showing the true `band.rgb` beside ordinary dark label
+text, which separates *the colour being shown* from *the text being read*: the
+swatch is then non-text at 3:1, the label is text at 4.5:1, and legend and map agree
+exactly instead of approximately. The other 40 findings are ordinary badges and
+alerts where the global palette change is the right fix.
+
+**How it was resolved.** `dashboard/map_legend.py` renders the swatch from the exact
+`band.rgb`, so `badge_colour()`'s nearest-named-colour approximation is gone from the
+legend entirely. A `2px solid #475569` border carries 1.4.11 at 7.24:1 against the
+page — necessary because **8 of the 19 fills cannot reach 3:1 alone**, the yellow
+band managing only 1.46. The label sits beside the swatch in ordinary page text.
+
+**One trap inside the fix, caught in review.** The test guarding the swatch looped
+over all 19 swatches asserting `contrast_ratio(border_rgb, page_rgb) >= 3.0` — a
+constant, recomputed 19 times, with the fill discarded. It read as per-swatch
+verification while asserting a single scalar, and would have passed with no swatches
+at all. It is now three tests, one of which checks the rendered markup; deleting the
+border fails the new test and **passes the old one**, which is what establishes the
+replacement is stronger rather than merely different. Sixth instance of the recurring
+lesson.
+
+Notable: none of this is reachable by `verify_streamlit.py`, `verify_layout.py`, or
+any of the 250 unit tests. Contrast was the largest unverified area named in the
+handover, and it turned out to be uniformly failing rather than mostly fine.
+
+---
+
+## J. Forecast vintages accumulate with no retention policy — P2
+
+Found by running the forecast DAG end to end twice, which nothing had ever done
+before: every previous Airflow claim in this repository rested on a DagBag import.
+
+**Idempotency holds where it has to.** Running the same DAG twice left
+`mart_location_hourly_forecast` at exactly **2448 rows** (34 locations x 72 hours)
+both times, because the mart resolves `max(forecast_issued_at_utc)` per location and
+serves one whole vintage. Re-running produces no duplicate serving rows — the core
+requirement, now with evidence rather than an assumption.
+
+**The fact tables grow, by design.** Each run appends a vintage:
+
+| Table | After run 1 | After run 2 | Per run |
+|---|---|---|---|
+| `fct_weather_forecast` | 4,896 | 7,344 | +2,448 |
+| `fct_air_quality_forecast` | 29,376 | 44,064 | +14,688 |
+| `mart_location_hourly_forecast` | 2,448 | **2,448** | **0** |
+| `fct_pipeline_run` | 4 | 5 | +1 |
+
+That accumulation is wanted: Phase 6 item 3 needs vintage history to join a forecast
+against the observation that later validated it. Without it there is no route to an
+accuracy figure.
+
+**What is missing is a stated bound.** Measured growth is **1 MB per run**, and the
+schedule is six-hourly, so roughly **1.4 GB per year** in a single local DuckDB file
+that also serves the dashboard. Nothing prunes, nothing monitors, and nothing warns.
+This is not urgent at current size, but it must be settled before item 11 (serving
+database), and the decision belongs with it: how long a vintage stays queryable,
+whether old vintages move to raw-only, and who notices when the file crosses a
+threshold.
+
+---
+
 ## Data-product limitations to disclose, not silently fix — P2
 
 These are honest modelling limits. They must be visible in the UI and in

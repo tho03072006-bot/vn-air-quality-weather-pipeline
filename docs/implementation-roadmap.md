@@ -242,10 +242,10 @@ are asserted; driving the form belongs with the outstanding interaction work in 
 
 | # | Item | Status |
 |---|---|---|
-| 5.1 | AppTest content assertions | **partially done** |
-| 5.2 | Accessibility pass: contrast, keyboard, colour-independence, table equivalents | partially done |
+| 5.1 | AppTest content assertions | **done** — history form now driven too |
+| 5.2 | Accessibility pass: contrast, keyboard, colour-independence, table equivalents | **contrast done** — 18/18 pass; keyboard still unmeasured |
 | 5.3 | Performance measurement, then fill the UI spec table with real numbers | **done** |
-| 5.4 | Browser QA | partially done — app driven in a real browser, no screenshots |
+| 5.4 | Browser QA | **done** — automated in `scripts/verify_layout.py`; still no screenshots |
 | 5.5 | README and docs reconciled against actual behaviour | **done** |
 
 **5.1 as far as it goes.** `scripts/verify_streamlit.py` previously asserted only
@@ -270,8 +270,84 @@ legend that renders both would fail. Both checks are discriminating by construct
 control that renders but does not re-query leaves the counts equal and the old bands
 present.
 
-Still missing from 5.1: stale and missing-data states, driving the history form, and
-an assertion that no network call happens on initial render.
+**5.1 now drives the history form.** `_check_history_form` submits it and asserts the
+loaded state rather than the pre-submit prompt. Driving it found two defects nothing
+else could have: the pollutant defaulted to `pollutants[0]`, which is NO2
+alphabetically and has *zero* observed rows in the warehouse, so a first-time
+reader's default submit could only ever return "Không có dữ liệu phù hợp" and read as
+a broken pipeline; and the coverage strip grouped by day, so a day with no rows
+produced no group and the page printed "every day in the selected range has a full 24
+hours" while ten of the twelve days held nothing at all.
+
+The second is the more serious, because the strip exists precisely to show missing
+data and was structurally blind to the worst case it could report. `build_coverage`
+now reindexes over the selected range times the selected locations, so an absent day
+is an explicit zero. Six tests cover it in `tests/test_coverage_view.py`, and three
+of them were confirmed to fail against the old implementation before being trusted —
+the old code returned 2 rows where the fixed code returns 12.
+
+Writing the check also produced a third instance of the recurring lesson: the first
+version clicked `app.button[0]`, which is the header's "Đọc lại warehouse" refresh
+control rather than the form submit, and reported a healthy page as broken. The
+*check* was fixed, not the page.
+
+Still missing from 5.1: stale and missing-data states, and an assertion that no
+network call happens on initial render.
+
+**5.4 is now automated.** `scripts/verify_layout.py` drives Chromium via Playwright
+across nine pages at 390x844 and 1280x800, measuring chart-versus-container width and
+CSS-clipped text — the two classes AppTest structurally cannot see. Playwright lives
+in a `qa` extra rather than `dev`, because it needs a browser download and `dev` must
+stay installable offline.
+
+It found the facet grid overflowing again. The Phase 3.2 fix sized it for a 790px
+desktop column; at a 390px viewport the same grid measured 641px inside a 327px
+container, and because no ancestor scrolled, three of the six pollutant panels were
+unreachable rather than merely cramped. The cause is that a Vega-Lite **facet** keeps
+its declared pixel width, while `width="stretch"` does override a pixel width on a
+*single* view — so the fix is one chart per pollutant laid out in column pairs, with
+no pixel width anywhere. Independent y scales, the point of the original redesign,
+are now structural rather than a `resolve_scale` argument.
+
+It also found four KPI **labels** clipped at 1280px. Those are a direct consequence
+of the Phase 3.1 fix: the unit was moved out of the metric value and into the label
+to stop the value being truncated to `75…`, justified by "the label wraps". The label
+does not wrap — Streamlit gives it `white-space: nowrap` and an ellipsis too — so the
+fix relocated the defect instead of removing it, and "PM2.5 mô hình trung vị (µg/m³)"
+needed 183px in a 161px box. `app.py` now overrides that CSS so labels wrap, which
+closes the class rather than the three instances.
+
+Both arms of the checker were proven to fail on the defects they exist to catch
+before being trusted, and one workaround inside it had to be removed for the opposite
+reason: collapsing the sidebar to satisfy Playwright's click checks widened the main
+column enough that the clipped labels stopped being clipped, turning a genuinely
+failing run green.
+
+**5.2's contrast half is measured and now passes.** `scripts/verify_a11y.py`
+resolves each text node's foreground against its composited ancestor backgrounds and
+grades it under WCAG 2.1. Its first run reported 94 findings on all nine pages at
+both viewports; it now reports none, and `verify_layout.py` still reports 18/18 so
+the legend rework did not overflow anything.
+
+The path there is the instructive part, and it was **94 → 52 → 0**:
+
+- **42 were the gate's fault.** Material Symbols ligature names (`warning`, `radar`,
+  `verified`, …) render as glyphs; no reader sees those words. They are non-text
+  under WCAG 1.4.11 at 3:1, not text at 4.5:1. Discrimination is by `font-family`,
+  not a name list — a name list was tried and missed `model_training` immediately.
+  Icons are graded at 3:1 rather than skipped, so a genuinely low-contrast icon is
+  still caught.
+- **40 were one palette.** Every badge and alert finding came from Streamlit's
+  built-in semantic colours, not anything this project chose, so a theme-level
+  override closed them all and none of the twenty call sites changed.
+- **12 were the map legend, and could not be fixed the same way.** Darkening the
+  palette there would have widened the gap between the legend chip and the marker it
+  labels, trading a legibility defect for a correctness one on the single component
+  where colour *is* the data. The legend now draws the exact `band.rgb` as a bordered
+  swatch beside ordinary dark text.
+
+Still unmeasured in 5.2: keyboard navigation, focus order, and screen-reader
+announcement. Contrast was the largest gap and is closed; these are the rest.
 
 **5.3 is measured, not estimated.** `scripts/benchmark_dashboard.py` times every page
 cold and warm; the numbers are in the UI spec with an explicit statement of what the
@@ -365,30 +441,27 @@ can be built honestly, rather than guessed at:
 | 5 | Whether empirical confidence replaces or sits beside the current lead-time heuristic during the transition |
 | 7, 8 | Where user state lives. The project has no identity model and no user store; `st.session_state` does not survive a restart |
 | 9 | Delivery semantics: at-least-once versus at-most-once, and what a user sees when a send fails. The existing idempotency key is designed for the former |
-| 11 | Whether DuckDB stays. The single-writer pool is an accepted local limitation; a serving database is the point at which it stops being acceptable |
+| 11 | Whether DuckDB stays. The single-writer pool is an accepted local limitation; a serving database is the point at which it stops being acceptable. Also a vintage retention policy: measured growth is 1 MB per forecast run, ~1.4 GB/year at the six-hourly schedule, in the same file the dashboard reads (section J of the audit register) |
 
 ### Known limitations carried forward, unresolved
 
 Recorded here so they are not rediscovered as surprises:
 
-- **`docker compose config` and the Airflow 3 DagBag import test have never been
-  run in this environment.** The `warehouse_writer` pool is verified only by
-  parsing the DAG source with `ast`; there is no evidence Airflow accepts the
-  declaration.
-- **No screenshots exist.** The app was driven in a real browser and its DOM read,
-  which found the duplicated header controls, but the Browser pane would not
-  composite frames so nothing was ever seen. Layout, spacing, contrast ratios, the
-  Altair facet panels, the PyDeck legend and the 390x844 mobile breakpoint are
-  unverified by eye.
+- **No screenshots exist.** The Browser pane does not composite frames in this
+  environment, so screenshot calls time out and nothing has been seen as an image.
+  Geometry is now measured instead, which covers the two defect classes that
+  actually shipped; **contrast ratios and typography remain unverified**, and those
+  are the parts an image would have helped with.
+- **Only two viewports and one state are measured.** `verify_layout.py` covers
+  390x844 and 1280x800 with default filters. Tablet widths, and the stale, empty and
+  error states of each page, are not measured.
 - **Performance is measured server-side only** (see the UI spec). Browser paint,
   WebGL setup and client-side Altair rendering are unmeasured, and the map is the
   likeliest place for a gap between the two.
-- **`data/warehouse/vn_air_quality_weather.duckdb` has not been rebuilt** with the
-  models added in Phases 1–4. It was left untouched deliberately rather than
-  overwritten; the dashboard reports its missing marts correctly, and running
-  `dbt build` against it is the fix.
 - **Coverage scope**: `pyproject.toml` limits `--cov` to `vn_air_quality_weather`,
-  so the `dashboard` package contributes tests but not coverage percentage.
+  so the `dashboard` package contributes tests but not coverage percentage. The 14
+  tests added for `build_coverage` and the chart specs therefore raise the test count
+  and not the percentage.
 
 ## Explicitly out of scope
 

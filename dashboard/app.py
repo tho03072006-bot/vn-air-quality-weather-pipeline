@@ -21,6 +21,75 @@ st.set_page_config(
 if "selected_province" not in st.session_state:
     st.session_state.selected_province = "hanoi"
 
+# Let a KPI label wrap instead of being cut off with an ellipsis.
+#
+# Streamlit styles the metric label `white-space: nowrap; text-overflow: ellipsis`,
+# so in a four-column KPI row it silently truncates. That is how "PM2.5 mô hình
+# trung vị (µg/m³)" -- 183px of text in a 161px box -- reached the browser as
+# "PM2.5 mô hình trung vị (µg…". The unit had been moved out of the value and into
+# the label precisely to stop the *value* being truncated, on the belief that labels
+# wrap. They do not, so the fix relocated the defect rather than removing it.
+#
+# CSS rather than shorter wording because shorter wording fixes three labels while
+# this fixes the class: any label, any future page, any viewport. Found by
+# scripts/verify_layout.py, which is what now keeps it fixed.
+#
+# Streamlit's semantic badge and alert backgrounds are intentionally pale, but the
+# foregrounds it derives for red, orange, green and gray do not reach 4.5:1 on those
+# backgrounds. Match the stable component selectors and the badge's semantic
+# background token, then replace only the foreground. Matching the background keeps
+# the blue CAMS badge out of the override and leaves every component background
+# untouched. Descendant selectors cover Material Symbols as well as normal text.
+st.html(
+    """
+    <style>
+      [data-testid="stMetricLabel"] * {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+      }
+
+      span.stMarkdownBadge[style*="background-color: rgba(255, 43, 43, 0.1)"],
+      span.stMarkdownBadge[style*="background-color: rgba(255, 43, 43, 0.1)"] * {
+        color: #882e30 !important;
+      }
+
+      span.stMarkdownBadge[style*="background-color: rgba(255, 164, 33, 0.1)"],
+      span.stMarkdownBadge[style*="background-color: rgba(255, 164, 33, 0.1)"] * {
+        color: #853c07 !important;
+      }
+
+      span.stMarkdownBadge[style*="background-color: rgba(33, 195, 84, 0.1)"],
+      span.stMarkdownBadge[style*="background-color: rgba(33, 195, 84, 0.1)"] * {
+        color: #0f5c27 !important;
+      }
+
+      span.stMarkdownBadge[style*="background-color: rgba(49, 51, 63, 0.1)"],
+      span.stMarkdownBadge[style*="background-color: rgba(49, 51, 63, 0.1)"] * {
+        color: #494a4f !important;
+      }
+
+      div[data-testid="stAlertContentError"],
+      div[data-testid="stAlertContentError"] *,
+      div[data-testid="stAlertContentError"] span[data-testid="stAlertDynamicIcon"] {
+        color: #882e30 !important;
+      }
+
+      div[data-testid="stAlertContentWarning"],
+      div[data-testid="stAlertContentWarning"] *,
+      div[data-testid="stAlertContentWarning"] span[data-testid="stAlertDynamicIcon"] {
+        color: #853c07 !important;
+      }
+
+      div[data-testid="stAlertContentSuccess"],
+      div[data-testid="stAlertContentSuccess"] *,
+      div[data-testid="stAlertContentSuccess"] span[data-testid="stAlertDynamicIcon"] {
+        color: #0f5c27 !important;
+      }
+    </style>
+    """
+)
+
 APP_PAGES = Path(__file__).resolve().parent / "app_pages"
 
 navigation = st.navigation(

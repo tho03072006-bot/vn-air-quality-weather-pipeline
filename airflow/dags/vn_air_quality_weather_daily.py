@@ -19,6 +19,13 @@ from vn_air_quality_weather.settings import WAREHOUSE_WRITER_POOL, Settings
     default_args={
         "retries": 2,
         "retry_delay": timedelta(minutes=5),
+        # The failure this retries is usually an OpenAQ rate limit or a timeout,
+        # and both take longer to clear than they take to hit. A flat five minutes
+        # retries into the same closed window twice; backing off spreads the two
+        # attempts over 15 minutes instead of 10. The HTTP client already backs off
+        # within a single task -- this is the same policy one level up.
+        "retry_exponential_backoff": True,
+        "max_retry_delay": timedelta(minutes=30),
         "on_failure_callback": log_task_failure,
     },
     tags=["air-quality", "weather", "vietnam"],

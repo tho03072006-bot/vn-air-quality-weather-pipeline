@@ -5,10 +5,13 @@ import pandas as pd
 import streamlit as st
 
 from dashboard.components import methodology_expander, metric_row
-from dashboard.components.charts import pollutant_small_multiples, render
+from dashboard.components.charts import render_pollutant_panels
+from dashboard.location_search import match_provinces, merge_search_results
 from dashboard.runtime import (
     cached_location_search,
     cached_on_demand_forecast,
+    cached_provinces,
+    database_path,
     format_local_timestamp,
     source_badges,
 )
@@ -23,12 +26,30 @@ st.caption(
 
 st.session_state.setdefault("custom_location", None)
 st.session_state.setdefault("custom_search_results", ())
+st.session_state.setdefault("custom_search_query", "")
+st.session_state.setdefault("custom_search_geocoding_unavailable", False)
+st.session_state.setdefault("custom_search_input", st.session_state.custom_search_query)
+if st.session_state.custom_search_results and not st.session_state.custom_search_query:
+    # Discard pre-fix results that have no stored query to identify what they match.
+    st.session_state.custom_search_results = ()
+
+
+def clear_custom_search() -> None:
+    """Clear submitted and widget state before a location-mode rerun."""
+
+    st.session_state.custom_search_results = ()
+    st.session_state.custom_search_query = ""
+    st.session_state.custom_search_geocoding_unavailable = False
+    st.session_state.custom_search_input = ""
+    st.session_state.pop("custom_search_selection", None)
+
 
 selection_mode = st.segmented_control(
     "Cách chọn địa điểm",
     ["Tìm địa danh", "Nhập tọa độ"],
     default="Tìm địa danh",
     key="custom_location_mode",
+    on_change=clear_custom_search,
     persist_state="session",
 )
 
@@ -37,36 +58,60 @@ if selection_mode == "Tìm địa danh":
         query = st.text_input(
             "Tên địa danh tại Việt Nam",
             placeholder="Ví dụ: Hội An, Sa Pa, Phú Quốc",
+            key="custom_search_input",
         )
         searched = st.form_submit_button("Tìm", icon=":material/search:")
 
+    search_failed = False
     if searched:
+        searched_query = query.strip()
+        st.session_state.custom_search_query = searched_query
+        st.session_state.custom_search_geocoding_unavailable = False
+        st.session_state.pop("custom_search_selection", None)
+
+        provinces = cached_provinces(str(database_path())).to_dict(orient="records")
+        province_matches = match_provinces(provinces, searched_query)
         try:
-            st.session_state.custom_search_results = cached_location_search(
-                query.strip().casefold(), 10
-            )
+            geocoded = list(cached_location_search(searched_query, 10))
         except (ValueError, httpx.HTTPError) as error:
-            st.session_state.custom_search_results = ()
-            st.error(f"Không thể tìm địa danh: {error}", icon=":material/location_off:")
+            geocoded = []
+            st.session_state.custom_search_geocoding_unavailable = True
+            if not province_matches:
+                search_failed = True
+                st.error(f"Không thể tìm địa danh: {error}", icon=":material/location_off:")
+
+        st.session_state.custom_search_results = tuple(
+            merge_search_results(province_matches, geocoded, limit=10)
+        )
 
     search_results = st.session_state.custom_search_results
-    if searched and not search_results:
+    if searched and not search_results and not search_failed:
         st.info("Không tìm thấy địa danh phù hợp tại Việt Nam.")
     if search_results:
+        searched_query = st.session_state.custom_search_query
         result_indexes = list(range(len(search_results)))
         selected_index = st.selectbox(
-            "Kết quả tìm kiếm",
+            f"Kết quả tìm kiếm cho «{searched_query}»",
             result_indexes,
-            format_func=lambda index: search_results[index]["display_label"],
+            format_func=lambda index: search_results[index].label,
             key="custom_search_selection",
         )
+        if st.session_state.custom_search_geocoding_unavailable:
+            st.caption(
+                "Kết quả từ danh mục tỉnh/thành vẫn khả dụng; phần tìm kiếm mở rộng "
+                "hiện không khả dụng."
+            )
         if st.button("Dùng địa điểm này", type="primary", icon=":material/add_location_alt:"):
             selected = search_results[selected_index]
             st.session_state.custom_location = {
-                "name": selected["display_label"],
-                "latitude": float(selected["latitude"]),
-                "longitude": float(selected["longitude"]),
-                "selection_source": "Open-Meteo Geocoding / GeoNames",
+                "name": selected.label,
+                "latitude": selected.latitude,
+                "longitude": selected.longitude,
+                "selection_source": (
+                    "Danh mục điểm đại diện 34 tỉnh/thành"
+                    if selected.origin == "province_registry"
+                    else "Open-Meteo Geocoding / GeoNames"
+                ),
             }
 else:
     with st.form("custom_coordinate_form"):
@@ -192,8 +237,8 @@ metric_row(
 with st.container(border=True):
     st.subheader("Bụi và khí ô nhiễm")
     st.caption("Mỗi chất một khung với trục y độc lập. Không so sánh độ cao giữa các khung.")
-    render(
-        pollutant_small_multiples(forecast),
+    render_pollutant_panels(
+        forecast,
         empty_message="Không có chất ô nhiễm nào đủ dữ liệu để vẽ.",
     )
 

@@ -5,12 +5,11 @@ import pydeck as pdk
 import streamlit as st
 
 from dashboard.components import freshness_badge, methodology_expander, metric_row
+from dashboard.map_legend import map_legend_html
 from dashboard.runtime import cached_current, format_local_timestamp, require_warehouse
 from dashboard.view_models import (
     MAP_METRICS,
     MISSING_DISPLAY,
-    MISSING_RGB,
-    badge_colour,
     band_colour,
     band_for,
     build_metric,
@@ -87,10 +86,7 @@ metric_row(
 # Legend is always visible, and every band carries its numeric range as text. A
 # reader who cannot separate the hues still gets the thresholds.
 st.caption(f"**Thang màu — {metric.label}.** {metric.legend_note}")
-with st.container(horizontal=True, horizontal_alignment="left"):
-    for band in metric.bands:
-        st.badge(band.label, color=badge_colour(band.rgb))
-    st.badge("Không có dữ liệu", color=badge_colour(MISSING_RGB), icon=":material/help:")
+st.html(map_legend_html(metric))
 
 layer = pdk.Layer(
     "ScatterplotLayer",

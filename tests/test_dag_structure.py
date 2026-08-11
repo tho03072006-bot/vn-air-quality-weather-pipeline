@@ -83,6 +83,64 @@ def test_the_pool_is_provisioned_by_compose() -> None:
     assert f"airflow pools set {WAREHOUSE_WRITER_POOL} 1" in compose
 
 
+def _dbt_project_roots(dag_path: Path) -> set[str]:
+    """Every literal path handed to run_dbt_build as project_root."""
+
+    tree = ast.parse(dag_path.read_text(encoding="utf-8"))
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id == "run_dbt_build"):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "project_root":
+                continue
+            # Path("/opt/project") -- the container convention, not a real
+            # directory on any developer machine.
+            value = keyword.value
+            if (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "Path"
+                and value.args
+                and isinstance(value.args[0], ast.Constant)
+            ):
+                roots.add(str(value.args[0].value))
+    return roots
+
+
+@pytest.mark.parametrize("dag_file", sorted(WAREHOUSE_WRITING_TASKS))
+def test_dbt_project_root_is_actually_mounted_by_compose(dag_file: str) -> None:
+    """The DAG's hard-coded container path must match what compose provides.
+
+    `run_dbt_build(project_root=Path("/opt/project"))` reads `<root>/dbt` for both
+    `--project-dir` and `--profiles-dir`. That directory exists only because
+    docker-compose bind-mounts `../dbt` there -- the image never copies it. So the
+    DAG depends on a path that is declared in a different file, in a different
+    language, with nothing tying the two together.
+
+    This is the same failure shape the pool test already guards: a DAG referencing
+    infrastructure that may not exist. Renaming the mount, or dropping it while
+    relying on the image, leaves the DAG importable and every unit test green, and
+    fails only at runtime inside `build_analytics` when dbt cannot find the project.
+    """
+
+    roots = _dbt_project_roots(DAG_DIR / dag_file)
+    assert roots, f"{dag_file} no longer calls run_dbt_build with an explicit project_root"
+
+    compose = (DAG_DIR.parent / "docker-compose.yml").read_text(encoding="utf-8")
+    for root in roots:
+        assert f":{root}/dbt" in compose, (
+            f"{dag_file} runs dbt against {root}/dbt, but docker-compose.yml mounts "
+            f"nothing there. dbt would fail with a missing project at runtime."
+        )
+        assert f":{root}/src" in compose, (
+            f"{dag_file} declares {root} as the project root, but compose does not "
+            f"mount src there -- library code and DAG code would drift apart again."
+        )
+
+
 def test_dags_do_not_read_wall_clock_time_for_their_data_window() -> None:
     # A DAG that derives its window from now() cannot backfill: a run for an
     # interval three months ago must produce what it would have produced then.

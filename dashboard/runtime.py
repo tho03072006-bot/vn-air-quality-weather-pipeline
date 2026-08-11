@@ -19,9 +19,11 @@ from dashboard.data_access import (
     load_provinces,
     relation_exists,
 )
+from dashboard.location_search import SearchOption, filter_relevant_places
 from dashboard.view_models import COVERAGE_LABELS, POLLUTANT_LABELS, normalise_datetimes
 from vn_air_quality_weather.clients.geocoding import OpenMeteoGeocodingClient
 from vn_air_quality_weather.clients.open_meteo import OpenMeteoClient
+from vn_air_quality_weather.geography import nearest_province
 from vn_air_quality_weather.on_demand import CustomLocation, fetch_on_demand_forecast
 from vn_air_quality_weather.settings import get_settings
 
@@ -108,7 +110,7 @@ def cached_pipeline_runs(path: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl="1h", max_entries=64, show_spinner=False)
-def cached_location_search(query: str, count: int = 10) -> tuple[dict[str, object], ...]:
+def cached_location_search(query: str, count: int = 10) -> tuple[SearchOption, ...]:
     """Search Vietnam locations with a bounded cache around the public API."""
 
     settings = get_settings()
@@ -116,12 +118,29 @@ def cached_location_search(query: str, count: int = 10) -> tuple[dict[str, objec
         timeout_seconds=settings.http_timeout_seconds,
         retry_policy=settings.retry_policy(),
     ) as client:
-        rows: list[dict[str, object]] = []
+        rows: list[SearchOption] = []
         for result in client.search(query, count=count):
-            row = asdict(result)
-            row["display_label"] = result.display_label
-            rows.append(row)
-        return tuple(rows)
+            nearest, distance_km = nearest_province(result.latitude, result.longitude)
+            # This is a nearest registry anchor, not a jurisdictional assignment;
+            # wording must never imply that the provider result "belongs" to it.
+            label = (
+                f"{result.display_label} · gần điểm đại diện {nearest.display_name} "
+                f"(~{distance_km:.0f} km)"
+            )
+            rows.append(
+                SearchOption(
+                    label=label,
+                    name=result.name,
+                    latitude=result.latitude,
+                    longitude=result.longitude,
+                    origin="geocoding",
+                    province_key=None,
+                    feature_code=result.feature_code,
+                    nearest_province_key=nearest.key,
+                    nearest_province_km=distance_km,
+                )
+            )
+        return tuple(filter_relevant_places(rows, query))
 
 
 @st.cache_data(ttl="15m", max_entries=128, show_spinner=False)

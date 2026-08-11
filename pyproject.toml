@@ -31,6 +31,14 @@ dev = [
     "pytest-cov>=6,<8",
     "ruff>=0.15,<1",
 ]
+# Browser-driven layout checks only. AppTest has no DOM and no layout engine, so it
+# cannot see a chart wider than its container or a value clipped by CSS -- both of
+# which shipped, and one of which recurred at a breakpoint the first fix did not
+# cover. Kept out of `dev` because it needs `playwright install chromium` (a browser
+# download) before it can run, and the rest of `dev` must stay installable offline.
+qa = [
+    "playwright>=1.49,<2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

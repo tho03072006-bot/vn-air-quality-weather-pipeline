@@ -54,58 +54,71 @@ def _long_form(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)
 
 
-def pollutant_small_multiples(frame: pd.DataFrame) -> alt.Chart | None:
-    """One small panel per pollutant, each with its own y scale.
+def pollutant_panels(frame: pd.DataFrame) -> list[tuple[str, alt.Chart]]:
+    """One independent chart per pollutant, in `POLLUTANT_SERIES` order.
 
-    A single shared axis was the previous design and it hid the very thing the chart
-    exists to show: O3 runs an order of magnitude above NO2, so NO2 flattened to a
-    line along the bottom and its shape became unreadable. Faceting with
-    `resolve_scale(y='independent')` keeps every pollutant legible; the panels are
-    for reading shape over time, which is why they must not be read against each
-    other as if they shared a scale.
+    Each pollutant gets its own chart rather than one faceted spec. A shared axis
+    was the original design and it hid the very thing the chart exists to show: O3
+    runs an order of magnitude above NO2, so NO2 flattened to a line along the
+    bottom. Faceting fixed that but introduced its own defect -- a Vega-Lite facet
+    carries a fixed pixel width and does not shrink to its container, so the grid
+    measured 641px inside a 327px column at a 390px viewport and the panels past
+    the fold were unreachable: no ancestor scrolled, so they were simply gone.
+
+    Separate single-view charts have no such width. Each is drawn with
+    `width="stretch"` by `render_pollutant_panels`, so Vega sizes it to whatever
+    column it lands in, at any viewport. Independence of the y scales -- the point
+    of the redesign -- is now structural rather than a `resolve_scale` argument.
     """
 
     long_form = _long_form(_chart_frame(frame))
     if long_form.empty:
-        return None
-    present = [label for _, label in _ordered_labels(long_form)]
-    return (
-        alt.Chart(long_form)
-        .mark_line(interpolate="monotone", strokeWidth=2)
-        .encode(
-            x=alt.X("valid_at_local:T", axis=TIME_AXIS),
-            y=alt.Y("concentration:Q", title="µg/m³"),
-            color=alt.Color(
-                "label:N",
-                title="Chất ô nhiễm",
-                scale=alt.Scale(
-                    domain=present,
-                    range=[pollutant_colour(key) for key, _ in _ordered_labels(long_form)],
-                ),
-                legend=None,
-            ),
-            tooltip=[
-                alt.Tooltip("valid_at_local:T", title="Giờ", format="%H:%M %d/%m"),
-                alt.Tooltip("label:N", title="Chất"),
-                alt.Tooltip("concentration:Q", title="Nồng độ", format=".1f"),
-            ],
+        return []
+    panels: list[tuple[str, alt.Chart]] = []
+    for pollutant, label in _ordered_labels(long_form):
+        series = long_form[long_form["pollutant"] == pollutant]
+        panels.append(
+            (
+                label,
+                alt.Chart(series)
+                .mark_line(interpolate="monotone", strokeWidth=2, color=pollutant_colour(pollutant))
+                .encode(
+                    x=alt.X("valid_at_local:T", axis=TIME_AXIS),
+                    y=alt.Y("concentration:Q", title="µg/m³"),
+                    tooltip=[
+                        alt.Tooltip("valid_at_local:T", title="Giờ", format="%H:%M %d/%m"),
+                        alt.Tooltip("label:N", title="Chất"),
+                        alt.Tooltip("concentration:Q", title="Nồng độ", format=".1f"),
+                    ],
+                )
+                .properties(height=150, title=label),
+            )
         )
-        # Two columns at 240px, not three at 260px. A facet has a fixed pixel width
-        # -- it does not shrink to its container -- and three columns measured 1000px
-        # inside a 790px column, so the panel grid overflowed and the page grew a
-        # horizontal scrollbar. Two columns leave room for the axis labels at this
-        # width and still fit when the sidebar is open.
-        .properties(height=150, width=240)
-        .facet(
-            facet=alt.Facet(
-                "label:N", title=None, sort=present, header=alt.Header(labelFontSize=13)
-            ),
-            columns=2,
-        )
-        # Independent y is the whole point of the redesign. Sharing it reintroduces
-        # the flattening this replaced.
-        .resolve_scale(y="independent")
-    )
+    return panels
+
+
+def render_pollutant_panels(frame: pd.DataFrame, *, empty_message: str) -> None:
+    """Lay the pollutant panels out two-up, stacking on a narrow viewport.
+
+    `st.columns` collapses to a single stacked column below Streamlit's small-screen
+    breakpoint, which is what makes this responsive without a media query or any
+    injected CSS. Two columns keep the desktop reading experience the facet gave.
+    """
+
+    panels = pollutant_panels(frame)
+    if not panels:
+        st.caption(empty_message)
+        return
+    # A fresh column pair per row, rather than one st.columns(2) filled round-robin.
+    # Both look identical on a wide screen, but when the columns collapse the
+    # round-robin version stacks a whole column at a time -- PM2.5, NO2, SO2, then
+    # PM10, O3, CO -- which is not the order POLLUTANT_SERIES declares. Pairing keeps
+    # the declared order in both layouts.
+    for start in range(0, len(panels), 2):
+        columns = st.columns(2)
+        for column, (_, chart) in zip(columns, panels[start : start + 2], strict=False):
+            with column:
+                st.altair_chart(chart, width="stretch")
 
 
 def _ordered_labels(long_form: pd.DataFrame) -> list[tuple[str, str]]:
