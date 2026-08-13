@@ -49,6 +49,24 @@ st.html(
         text-overflow: clip !important;
       }
 
+      /* Guarantee a visible keyboard focus indicator everywhere (WCAG 2.4.7).
+         Streamlit rings most of its widgets but not all: measured with
+         scripts/verify_keyboard.py, the date-range input, the multiselect input and
+         the chart canvas elements looked identical focused and unfocused under a real
+         Tab press, so a keyboard reader could not tell where they were.
+         `:focus-visible` rather than `:focus` keeps the ring off a mouse click, and
+         one blanket rule rather than three selectors covers any widget added later.
+
+         NEVER write an angle-bracketed tag name inside this block, not even in a
+         comment. st.html sanitises its argument as markup, so a literal tag name
+         terminates the style element and silently discards every rule after it --
+         which is how this very rule, and the badge colours below it, went missing
+         from the page while remaining present in this file. */
+      :focus-visible {
+        outline: 2px solid #0F766E !important;
+        outline-offset: 2px !important;
+      }
+
       span.stMarkdownBadge[style*="background-color: rgba(255, 43, 43, 0.1)"],
       span.stMarkdownBadge[style*="background-color: rgba(255, 43, 43, 0.1)"] * {
         color: #882e30 !important;

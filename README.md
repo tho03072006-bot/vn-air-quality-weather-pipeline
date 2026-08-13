@@ -143,17 +143,24 @@ structurally cannot see, because AppTest has no DOM and no layout engine: a char
 drawn wider than its container, and text clipped by a CSS ellipsis. Both have
 shipped before, and the first recurred at a viewport its original fix did not cover.
 
-The contrast gate runs the same way and is also expected to fail today:
+Two accessibility gates run the same way:
 
 ```powershell
-python scripts\verify_a11y.py
+python scripts\verify_a11y.py       # WCAG 1.4.3 / 1.4.11 text contrast
+python scripts\verify_keyboard.py   # WCAG 2.1.1 / 2.4.7 keyboard, 2.4.3 advisory
 ```
 
-It composites each text node's foreground against its ancestor backgrounds and
-grades the result under WCAG 2.1. It currently reports findings on every page,
-reducing to four Streamlit badge and alert colours; see section I of
-[the audit register](docs/code-audit-and-risk-register.md) for the breakdown and
-for the one correction the checker itself still needs.
+The contrast gate composites each text node's foreground against its ancestor
+backgrounds; the keyboard gate presses Tab and measures what the keyboard actually
+reaches and how focus looks. Both pass today. 2.4.3 (focus order) is reported but
+does not fail the run — sections I and K of
+[the audit register](docs/code-audit-and-risk-register.md) record why, along with
+the five false-positive classes that had to be removed from these gates before
+their output could be trusted.
+
+All three browser gates run in CI with `--skip-live-api`, which drops the
+custom-location page because its driver calls the real forecast API and CI is
+offline by contract. Run them without the flag locally to cover all nine pages.
 
 ## Dashboard
 

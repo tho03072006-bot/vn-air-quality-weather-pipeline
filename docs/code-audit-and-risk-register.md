@@ -611,6 +611,44 @@ threshold.
 
 ---
 
+## K. Keyboard access was never measured — P1, mostly resolved
+
+`scripts/verify_keyboard.py` now audits WCAG 2.1.1 (Keyboard), 2.4.7 (Focus Visible)
+and 2.4.3 (Focus Order) across nine pages at two viewports. 2.1.1 and 2.4.7 are
+enforced and pass; 2.4.3 is reported but advisory, for the reason below.
+
+**One real defect, fixed.** Under a real Tab press the date-range input, the
+multiselect input and the chart canvases looked identical focused and unfocused, so a
+keyboard reader had no way to tell where they were. `app.py` now carries a blanket
+`:focus-visible` rule, which closes the class rather than the three instances.
+
+**Four false-positive classes had to be removed from the gate before its output could
+be believed**, and every one produced a confident-looking failure on almost every
+page:
+
+| Wrong measurement | What it reported | Why it was wrong |
+|---|---|---|
+| `el.focus()` instead of pressing Tab | 10 of 12 controls "have no focus indicator" | Browsers apply `:focus-visible` on keyboard focus, often not on programmatic focus. A real Tab showed a ring on all ten |
+| Judging only the focused node | every text input and selectbox failing 2.4.7 | Streamlit paints the ring on the wrapper, not the input. Now four layers are compared, mirroring how the contrast gate composites ancestors |
+| Running-maximum focus order | one anomaly became five findings, at increasing positions | Compared against the previous step instead |
+| DOM index as the order | backwards jumps on six page/viewport pairs | Streamlit portals paint at the top while living at the end of the document. Visual position is what 2.4.3 actually means |
+| `closest('[data-testid]')` for widget scope | both number-input steppers on every viewport | That testid is the stepper column itself; the reachable input sits one level further out |
+
+**2.4.3 stays advisory.** After four measurement strategies a residue remains on
+several pages that could not be attributed to a real defect with confidence. This
+project's own rule is that a check which misreports is worse than no check, so it
+prints and a human decides. Promoting it to blocking is the next piece of work.
+
+**A separate trap, worth its own line.** The `:focus-visible` fix was written, looked
+correct in `app.py`, and did nothing — because a CSS comment in the same block
+contained a literal angle-bracketed tag name. `st.html` sanitises its argument as
+markup, so that terminated the style element and silently discarded every rule after
+it, including the badge colours from finding I. The file said one thing and the page
+did another, and only measuring the rendered DOM revealed it. `app.py` now carries a
+warning at that spot.
+
+---
+
 ## Data-product limitations to disclose, not silently fix — P2
 
 These are honest modelling limits. They must be visible in the UI and in

@@ -24,8 +24,9 @@ Every figure below was measured at handover, not estimated.
 |---|---|---|
 | Format | `ruff format --check .` | 73 files clean |
 | Lint | `ruff check .` | pass |
-| Unit tests | `pytest` | **266 passed**, coverage 89.76% |
+| Unit tests | `pytest` | **300 passed**, coverage 89.76% |
 | Contrast | `python scripts/verify_a11y.py` | **18/18** (9 pages x 2 viewports) |
+| Keyboard | `python scripts/verify_keyboard.py` | **no blocking findings**; 23 advisory (2.4.3) |
 | dbt | `dbt build` | **PASS=129, ERROR=0** |
 | Source freshness | `dbt source freshness` | pass |
 | Dashboard | `python scripts/verify_streamlit.py` | **10/10** (9 pages + interactions) |

@@ -243,7 +243,7 @@ are asserted; driving the form belongs with the outstanding interaction work in 
 | # | Item | Status |
 |---|---|---|
 | 5.1 | AppTest content assertions | **done** — history form now driven too |
-| 5.2 | Accessibility pass: contrast, keyboard, colour-independence, table equivalents | **contrast done** — 18/18 pass; keyboard still unmeasured |
+| 5.2 | Accessibility pass: contrast, keyboard, colour-independence, table equivalents | **done** — contrast 18/18; keyboard 2.1.1 and 2.4.7 enforced and passing, 2.4.3 advisory |
 | 5.3 | Performance measurement, then fill the UI spec table with real numbers | **done** |
 | 5.4 | Browser QA | **done** — automated in `scripts/verify_layout.py`; still no screenshots |
 | 5.5 | README and docs reconciled against actual behaviour | **done** |

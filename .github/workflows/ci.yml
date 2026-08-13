@@ -38,6 +38,47 @@ jobs:
         env:
           DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
         run: dbt source freshness --project-dir dbt --profiles-dir dbt
+
+      # The three browser gates below are the only checks that can see a chart wider
+      # than its container, text clipped by CSS, a colour below WCAG contrast, or a
+      # control Tab cannot reach. AppTest has no DOM and no layout engine, so none of
+      # those defect classes is reachable from `verify_streamlit.py` -- and every one
+      # of them has shipped in this project at least once. Running them only by hand
+      # is what let four of them reach a reader.
+      - name: Install browser QA tooling
+        run: |
+          python -m pip install --editable ".[qa]"
+          python -m playwright install --with-deps chromium
+
+      - name: Start the dashboard
+        env:
+          DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb
+        run: |
+          # Must launch from the project root: Streamlit reads .streamlit/config.toml
+          # relative to the working directory and silently drops the theme otherwise,
+          # which would change every colour the contrast gate measures.
+          streamlit run dashboard/app.py --server.port 8501 --server.headless true &
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:8501/_stcore/health > /dev/null; then
+              echo "dashboard up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "dashboard did not become healthy in 120s" >&2
+          exit 1
+
+      # --skip-live-api drops the custom-location page, whose driver enters
+      # coordinates and calls the real forecast API. CI is offline and deterministic
+      # by contract, so eight gated pages beat nine flaky ones; that page stays a
+      # manual check. Removing the flag is a deliberate decision, not a tidy-up.
+      - name: Verify layout in a real browser
+        run: python scripts/verify_layout.py --skip-live-api
+
+      - name: Verify text contrast (WCAG 2.1 AA)
+        run: python scripts/verify_a11y.py --skip-live-api
+
+      - name: Verify keyboard access (WCAG 2.1.1 / 2.4.3 / 2.4.7)
+        run: python scripts/verify_keyboard.py --skip-live-api
       - name: Generate dbt docs
         env:
           DUCKDB_PATH: ${{ github.workspace }}/data/warehouse/ci.duckdb

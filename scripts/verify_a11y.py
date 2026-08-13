@@ -64,6 +64,10 @@ PAGES = (
     ("/pipeline_health", "Pipeline health"),
 )
 
+# The only page whose audit reaches an external service: its driver enters
+# coordinates, which calls the live forecast API. CI drops it to stay offline.
+LIVE_API_PAGES: frozenset[str] = frozenset({"/custom_location"})
+
 VIEWPORTS = ((390, 844), (1280, 800))
 
 
@@ -242,7 +246,10 @@ def measure(page: Page, path: str, width: int, height: int) -> list[Finding]:
     return findings
 
 
-def run(base_url: str) -> list[Finding]:
+def run(base_url: str, *, skip_live_api: bool = False) -> list[Finding]:
+    pages = [
+        (path, label) for path, label in PAGES if not (skip_live_api and path in LIVE_API_PAGES)
+    ]
     findings: list[Finding] = []
     with sync_playwright() as driver:
         browser = driver.chromium.launch()
@@ -250,7 +257,7 @@ def run(base_url: str) -> list[Finding]:
             for width, height in VIEWPORTS:
                 context = browser.new_context(viewport={"width": width, "height": height})
                 page = context.new_page()
-                for path, label in PAGES:
+                for path, label in pages:
                     try:
                         page.goto(f"{base_url}{path}", wait_until="load", timeout=45000)
                         page.wait_for_selector('[data-testid="stMain"]', timeout=30000)
@@ -278,15 +285,21 @@ def run(base_url: str) -> list[Finding]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://localhost:8501")
+    parser.add_argument(
+        "--skip-live-api",
+        action="store_true",
+        help="drop pages whose audit calls an external API (CI uses this)",
+    )
     arguments = parser.parse_args()
 
-    findings = run(arguments.base_url.rstrip("/"))
+    findings = run(arguments.base_url.rstrip("/"), skip_live_api=arguments.skip_live_api)
     if findings:
         print(f"\n{len(findings)} contrast problem(s):", file=sys.stderr)
         for finding in findings:
             print(f"  {finding.viewport} {finding.page}: {finding.detail}", file=sys.stderr)
         raise SystemExit(1)
-    print("\nNo contrast problems at " + ", ".join(f"{w}x{h}" for w, h in VIEWPORTS))
+    scope = " (live-API pages skipped)" if arguments.skip_live_api else ""
+    print("\nNo contrast problems at " + ", ".join(f"{w}x{h}" for w, h in VIEWPORTS) + scope)
 
 
 if __name__ == "__main__":
