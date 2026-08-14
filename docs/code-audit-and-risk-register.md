@@ -649,6 +649,23 @@ warning at that spot.
 
 ---
 
+## L. A bare Airflow cron silently selected the unfinished day — P1, resolved
+
+Airflow 3 defaults `create_cron_data_intervals=False`, so a bare cron string creates
+a `CronTriggerTimetable` with an empty interval. The daily task derives its fetch date
+from `data_interval_start`; at the `2026-08-14 02:00 UTC` run that combination selected
+`2026-08-14`, while that day's observations were still incomplete, and could report
+success despite loading the wrong business day.
+
+The daily DAG now declares `CronDataIntervalTimetable` explicitly. Its run at
+`2026-08-14 02:00 UTC` owns the completed interval starting `2026-08-13 02:00 UTC`, so
+the task fetches `2026-08-13`. This is a local DAG contract, not a global Airflow
+configuration change: the forecast DAG keeps its trigger timetable. Any future DAG
+that derives a date from `data_interval_start` must make the same interval semantics
+explicit rather than relying on a bare cron string.
+
+---
+
 ## Data-product limitations to disclose, not silently fix — P2
 
 These are honest modelling limits. They must be visible in the UI and in

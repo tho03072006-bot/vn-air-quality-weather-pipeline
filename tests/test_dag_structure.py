@@ -1,9 +1,10 @@
-"""Static checks on the DAG files.
+"""Mostly-static checks on the DAG files.
 
 Airflow is not a project dependency -- it exists only in the container image -- so
 these parse the DAG source instead of importing it. That is a real limitation: it
 verifies the declarations, not that Airflow accepts them. The DagBag import test
-run inside the Airflow image covers the other half.
+run inside the Airflow image covers the other half. The daily-timetable regression
+also exercises Airflow's implementation when this file runs in that image.
 """
 
 import ast
@@ -20,6 +21,58 @@ WAREHOUSE_WRITING_TASKS = {
     "vn_air_quality_weather_daily.py": {"extract_store_and_load", "build_analytics"},
     "vn_air_quality_weather_forecast.py": {"ingest_forecast", "build_analytics"},
 }
+
+
+def _dag_schedule(dag_path: Path) -> ast.expr:
+    """Return the value assigned to ``schedule`` on the file's ``@dag``."""
+
+    tree = ast.parse(dag_path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if not (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Name)
+                and decorator.func.id == "dag"
+            ):
+                continue
+            for keyword in decorator.keywords:
+                if keyword.arg == "schedule":
+                    return keyword.value
+    raise AssertionError(f"{dag_path.name} has no @dag schedule")
+
+
+def test_daily_timetable_targets_the_previous_completed_day() -> None:
+    """A run after 2026-08-14 02:00 UTC must process 2026-08-13."""
+
+    schedule = _dag_schedule(DAG_DIR / "vn_air_quality_weather_daily.py")
+    assert isinstance(schedule, ast.Call), (
+        "daily must use CronDataIntervalTimetable; a bare cron string becomes "
+        "CronTriggerTimetable and gives the task a zero-length interval"
+    )
+    assert isinstance(schedule.func, ast.Name)
+    assert schedule.func.id == "CronDataIntervalTimetable"
+    assert len(schedule.args) == 1
+    assert ast.literal_eval(schedule.args[0]) == "0 2 * * *"
+    assert {keyword.arg: ast.literal_eval(keyword.value) for keyword in schedule.keywords} == {
+        "timezone": "UTC"
+    }
+
+    # Host-side tests intentionally do not install Airflow. In the Airflow image,
+    # exercise the actual timetable as well as guarding its source declaration.
+    try:
+        from airflow.timetables.interval import CronDataIntervalTimetable
+    except ModuleNotFoundError:
+        return
+
+    import pendulum
+
+    timetable = CronDataIntervalTimetable("0 2 * * *", timezone="UTC")
+    interval = timetable.infer_manual_data_interval(
+        run_after=pendulum.datetime(2026, 8, 14, 2, 0, tz="UTC")
+    )
+    assert interval.start.date().isoformat() == "2026-08-13"
 
 
 def _task_pools(dag_path: Path) -> dict[str, str | None]:

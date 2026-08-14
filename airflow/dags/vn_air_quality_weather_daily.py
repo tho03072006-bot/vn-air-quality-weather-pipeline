@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pendulum
 from airflow.sdk import dag, get_current_context, task
+from airflow.timetables.interval import CronDataIntervalTimetable
 
 from vn_air_quality_weather.airflow_callbacks import log_task_failure
 from vn_air_quality_weather.pipeline import run_day, run_dbt_build
@@ -12,8 +13,14 @@ from vn_air_quality_weather.settings import WAREHOUSE_WRITER_POOL, Settings
 
 @dag(
     dag_id="vn_air_quality_weather_daily",
-    schedule="0 2 * * *",
-    start_date=pendulum.datetime(2026, 7, 1, tz="UTC"),
+    # extract_store_and_load derives its data date from data_interval_start, so
+    # this DAG needs a real data interval. A bare cron string becomes a zero-length
+    # CronTriggerTimetable in Airflow 3 and would fetch the still-unfinished run day.
+    schedule=CronDataIntervalTimetable("0 2 * * *", timezone="UTC"),
+    # Start at the leading edge of the real observation gap: the warehouse is
+    # current through 2026-08-08. The project began earlier, but that is not a
+    # useful boundary for catchup because no observations exist before 2026-07-27.
+    start_date=pendulum.datetime(2026, 8, 8, tz="UTC"),
     catchup=True,
     max_active_runs=1,
     default_args={

@@ -29,10 +29,15 @@ x-airflow-common: &airflow-common
   depends_on:
     postgres:
       condition: service_healthy
+  # A Windows-to-WSL2 bind mount can transiently raise EIO while the DAG processor
+  # scans dags/. Without a restart policy that one process dies while the scheduler
+  # and UI stay healthy-looking, so scheduled runs stop silently until a human notices.
+  restart: unless-stopped
 
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow

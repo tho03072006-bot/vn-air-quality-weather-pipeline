@@ -89,6 +89,13 @@ docker compose -f airflow\docker-compose.yml up airflow-init
 docker compose -f airflow\docker-compose.yml up -d
 ```
 
+For a one-off daily-DAG test of data date `2026-08-07`, pass the following
+interval end (not the data date) as the logical date:
+
+```powershell
+docker compose -f airflow\docker-compose.yml exec airflow-scheduler airflow dags test vn_air_quality_weather_daily 2026-08-08T02:00:00+00:00
+```
+
 ## 4. What was fixed, and how it was proved
 
 Eight correctness defects and four display defects. The proof matters as much as
