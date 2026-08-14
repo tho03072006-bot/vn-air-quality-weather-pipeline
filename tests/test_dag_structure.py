@@ -2,9 +2,9 @@
 
 Airflow is not a project dependency -- it exists only in the container image -- so
 these parse the DAG source instead of importing it. That is a real limitation: it
-verifies the declarations, not that Airflow accepts them. The DagBag import test
-run inside the Airflow image covers the other half. The daily-timetable regression
-also exercises Airflow's implementation when this file runs in that image.
+verifies declarations, not that Airflow accepts them. The timetable test explicitly
+skips its behavioural half when Airflow is unavailable on the host; CI's DagBag check
+is where the runtime implementation is always exercised.
 """
 
 import ast
@@ -59,12 +59,13 @@ def test_daily_timetable_targets_the_previous_completed_day() -> None:
         "timezone": "UTC"
     }
 
-    # Host-side tests intentionally do not install Airflow. In the Airflow image,
-    # exercise the actual timetable as well as guarding its source declaration.
-    try:
-        from airflow.timetables.interval import CronDataIntervalTimetable
-    except ModuleNotFoundError:
-        return
+    # Host-side tests intentionally do not install Airflow. Keep that absence
+    # visible in pytest instead of reporting a misleading pass.
+    interval_module = pytest.importorskip(
+        "airflow.timetables.interval",
+        reason="Airflow runtime is unavailable; host test covers the DAG declaration only",
+    )
+    CronDataIntervalTimetable = interval_module.CronDataIntervalTimetable
 
     import pendulum
 

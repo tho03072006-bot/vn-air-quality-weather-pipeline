@@ -47,9 +47,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from dashboard.keyboard_a11y import (  # noqa: E402, I001
     FOCUS_INDICATOR_PROPERTIES,
     ElementSnapshot,
+    FocusCycleDetector,
+    FocusStop,
+    LayoutBox,
     focus_indicator_visible,
-    focus_order_regressions,
     positive_tabindex_elements,
+    reading_order_regressions,
     unreachable_interactive_elements,
 )
 
@@ -74,21 +77,35 @@ VIEWPORTS: tuple[tuple[int, int], ...] = ((390, 844), (1280, 800))
 # Enough presses to cross the sidebar navigation and reach the page body.
 TAB_PRESSES = 40
 
-# 2.4.3 is reported but does not fail the run, and that is a deliberate, temporary
-# concession rather than a permanent exemption.
+# Empty: all three criteria are enforced. 2.4.3 was advisory while its measurement
+# still misreported, on this project's rule that a check which misreports is worse
+# than no check. Seven wrong measurements had to be removed before it could be
+# trusted, and the count is recorded because each one looked reasonable when written:
 #
-# The criterion asks whether the focus sequence preserves meaning. Four measurement
-# strategies were tried: DOM index (wrong -- Streamlit portals paint at the top while
-# living at the end of the document), running-maximum comparison (wrong -- one jump
-# cascaded into five findings), visual position (better), and visual position with
-# fixed/sticky elements excluded (better still). Findings fell 24 -> 12, but a
-# residue remains on three pages that could not be attributed to a real defect with
-# confidence, and this project's own rule is that a check which misreports is worse
-# than no check.
+# * DOM index -- Streamlit portals paint at the top of the page while living at the
+#   end of the document, so this reported jumps on six page/viewport pairs.
+# * Running maximum -- after one genuine jump every later well-ordered step still
+#   sits below the maximum, so one anomaly became five findings.
+# * A fixed 40 Tab presses -- pages hold 16-29 stops, so the walk wrapped and
+#   re-entered at the top: 23 of the 40 findings were that wrap.
+# * Leaf position, compared flat -- a chart's toolbar and a grid's canvas share one
+#   widget and neither orders the other. 24 findings.
+# * Leaf position, compared across columns -- reading order in a column layout is
+#   hierarchical: down the left column, then up to the top of the right. 11 findings.
+# * Invisible elements included -- every heading carries an opacity-0 anchor link
+#   that Tab lands on and no reader can see. 10 findings.
+# * Container position measured during the walk -- focusing opens pickers and
+#   scrolls the page; one container moved 439px between two presses. 3 findings.
 #
-# So it prints, and a human decides. 2.1.1 and 2.4.7 are enforced because both were
-# proven to discriminate. Promoting 2.4.3 to blocking is the next piece of work here.
-ADVISORY_CRITERIA: frozenset[str] = frozenset({"2.4.3"})
+# The last one is the sharpest: those three survived every other correction on a page
+# whose DOM order was separately measured to match its visual order exactly. Reading
+# order is a property of the page at rest, so container positions are now recorded
+# once before the walk starts.
+#
+# Findings fell 37 -> 0 on the fixture warehouse without the gate losing its teeth:
+# a CSS `order` that reverses two columns while leaving document order alone -- the
+# textbook 2.4.3 violation -- still produces a finding on all eight pages.
+ADVISORY_CRITERIA: frozenset[str] = frozenset()
 
 
 COLLECT_JS = """
@@ -165,14 +182,20 @@ TAG_AND_BASELINE_JS = """
     return layers;
   };
 
-  const baseline = {};
-  [...main.querySelectorAll(
+  const focusable = [...document.querySelectorAll(
     'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
   )].filter((el) => {
     const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0 && !el.hasAttribute('disabled')
       && el.closest('[aria-hidden="true"]') === null;
-  }).forEach((el, index) => {
+  });
+  focusable.forEach((el, index) => {
+    el.setAttribute('data-kbcycle', String(index));
+  });
+  window.__kbcycleNext = focusable.length;
+
+  const baseline = {};
+  focusable.filter((el) => main.contains(el)).forEach((el, index) => {
     el.setAttribute('data-kbprobe', String(index));
     baseline[index] = {
       layers: layersOf(el),
@@ -181,14 +204,52 @@ TAG_AND_BASELINE_JS = """
         .replace(/\\s+/g, ' ').trim().slice(0, 40),
     };
   });
-  return baseline;
+  // Where every layout container sits when the page is at rest. Reading order is a
+  // property of the page a reader looks at, not of the page mid-interaction, and
+  // measuring during the walk made it wrong: focusing a time input opens a picker,
+  // focusing anything low on the page scrolls it, and either can move a container
+  // hundreds of pixels between one Tab press and the next. Three findings survived
+  // every other correction purely because of that, on a page whose DOM order was
+  // measured to match its visual order exactly.
+  const LAYOUT_TESTIDS = ['stHorizontalBlock', 'stColumn', 'stLayoutWrapper',
+                          'stVerticalBlock', 'stElementContainer'];
+  const containers = {};
+  [...main.querySelectorAll('[data-testid]')].forEach((node, index) => {
+    const testid = node.getAttribute('data-testid');
+    if (LAYOUT_TESTIDS.indexOf(testid) === -1) return;
+    const key = `container-${index}`;
+    node.setAttribute('data-kbcontainer', key);
+    const box = node.getBoundingClientRect();
+    containers[key] = {
+      y: box.top + window.scrollY, x: box.left + window.scrollX,
+      width: box.width, height: box.height,
+    };
+  });
+  return {baseline, containers};
 }
 """
 
 FOCUSED_STATE_JS = """
 (properties) => {
   const el = document.activeElement;
-  if (!el || el === document.body) return null;
+  if (!el) return null;
+  const isBody = el === document.body;
+  if (isBody) {
+    return {
+      cycleId: null,
+      probeIndex: null,
+      isBody: true,
+      inMain: false,
+      anchored: false,
+      layers: [],
+    };
+  }
+  let cycleId = el.getAttribute('data-kbcycle');
+  if (cycleId === null) {
+    cycleId = `dynamic-${window.__kbcycleNext ?? 0}`;
+    window.__kbcycleNext = (window.__kbcycleNext ?? 0) + 1;
+    el.setAttribute('data-kbcycle', cycleId);
+  }
   const snapshot = (node) => {
     const style = getComputedStyle(node);
     return Object.fromEntries(properties.map((name) => [name, style[name]]));
@@ -209,10 +270,39 @@ FOCUSED_STATE_JS = """
     const position = getComputedStyle(c).position;
     if (position === 'fixed' || position === 'sticky') { anchored = true; break; }
   }
+  // Whether a reader can actually see this element. Streamlit gives every heading a
+  // "Link to heading" anchor that is a real <a href> -- so Tab lands on it -- painted
+  // at opacity 0 until the heading is hovered. Nine of them sit at scattered
+  // positions on a page, and judging a reading order against something invisible is
+  // judging noise. Position is only meaningful for what is on screen.
+  let visible = rect.width > 0 && rect.height > 0;
+  for (let c = el; c && visible; c = c.parentElement) {
+    const s = getComputedStyle(c);
+    if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0) {
+      visible = false;
+    }
+  }
+  // Every layout container from the main region down to the element, outermost
+  // first. Reading order in a column layout is hierarchical, so two stops have to
+  // be compared at the outermost container where their paths diverge -- see
+  // reading_order_regressions. Each container is tagged so "still inside this one"
+  // can be told from "came back to it", which are not the same thing.
+  // Only the identity of each container on the path. Their positions were recorded
+  // once, before the walk started, by TAG_AND_BASELINE_JS -- see the comment there.
+  const path = [];
+  for (let c = el; c && c !== document.body; c = c.parentElement) {
+    const key = c.getAttribute('data-kbcontainer');
+    if (key !== null) path.push(key);
+  }
+  path.reverse();
   return {
+    cycleId,
     probeIndex: el.getAttribute('data-kbprobe'),
+    isBody: false,
     y: rect.top + window.scrollY,
     x: rect.left + window.scrollX,
+    path,
+    visible,
     anchored,
     inMain: el.closest('[data-testid="stMain"]') !== null,
     layers,
@@ -286,31 +376,56 @@ def _snapshots(page: Page) -> list[ElementSnapshot]:
 
 def _walk_with_tab(
     page: Page,
-) -> tuple[list[tuple[float, float]], list[dict[str, Any]]]:
+) -> tuple[list[FocusStop], list[dict[str, Any]]]:
     """Press Tab across the page, collecting focus order and focus appearance at once.
 
-    Returns `(visual_positions, unfocused_findings)`. One walk serves both criteria
-    because both need the same thing: the element the keyboard actually landed on.
+    Returns `(stops, unfocused_findings)`. One walk serves both criteria because both
+    need the same thing: the element the keyboard actually landed on.
     """
 
-    baseline: dict[str, Any] = page.evaluate(TAG_AND_BASELINE_JS, list(FOCUS_INDICATOR_PROPERTIES))
+    tagged: dict[str, Any] = page.evaluate(TAG_AND_BASELINE_JS, list(FOCUS_INDICATOR_PROPERTIES))
+    baseline: dict[str, Any] = tagged["baseline"]
+    containers: dict[str, Any] = tagged["containers"]
     page.evaluate("() => document.body.focus()")
 
-    positions: list[tuple[float, float]] = []
+    stops: list[FocusStop] = []
     without_indicator: list[dict[str, Any]] = []
     judged: set[str] = set()
+    cycle_detector = FocusCycleDetector()
 
     for _ in range(TAB_PRESSES):
         page.keyboard.press("Tab")
         step = page.evaluate(FOCUSED_STATE_JS, list(FOCUS_INDICATOR_PROPERTIES))
-        if step is None or not step["inMain"]:
+        if step is None:
+            continue
+        if cycle_detector.should_stop(
+            step["cycleId"],
+            in_main=bool(step["inMain"]),
+            is_body=bool(step["isBody"]),
+        ):
+            break
+        if step["isBody"] or not step["inMain"]:
             # Only the main region is judged; entering it from the sidebar is one
             # legitimate jump that would otherwise read as a regression.
             continue
-        # Focus appearance is still judged for anchored controls; only their place in
-        # the reading order is meaningless.
-        if not step["anchored"]:
-            positions.append((float(step["y"]), float(step["x"])))
+        # Focus appearance is still judged for anchored and invisible controls; only
+        # their place in the reading order is meaningless.
+        if not step["anchored"] and step["visible"]:
+            stops.append(
+                FocusStop(
+                    path=tuple(
+                        LayoutBox(
+                            key=str(key),
+                            y=float(containers[key]["y"]),
+                            x=float(containers[key]["x"]),
+                            width=float(containers[key]["width"]),
+                            height=float(containers[key]["height"]),
+                        )
+                        for key in step["path"]
+                        if key in containers
+                    )
+                )
+            )
 
         probe = step["probeIndex"]
         if probe is None or probe in judged or probe not in baseline:
@@ -320,7 +435,7 @@ def _walk_with_tab(
         if not focus_indicator_visible(base["layers"], step["layers"]):
             without_indicator.append(base)
 
-    return positions, without_indicator
+    return stops, without_indicator
 
 
 def measure(page: Page, path: str, viewport: str) -> list[Finding]:
@@ -349,15 +464,15 @@ def measure(page: Page, path: str, viewport: str) -> list[Finding]:
             )
         )
 
-    positions, without_indicator = _walk_with_tab(page)
+    stops, without_indicator = _walk_with_tab(page)
 
-    for step, (y, x) in focus_order_regressions(positions):
+    for step, (y, x) in reading_order_regressions(stops):
         findings.append(
             Finding(
                 path,
                 viewport,
                 "2.4.3",
-                f"Tab press {step} moved backwards on screen, to y={y:.0f} x={x:.0f}",
+                f"Tab moved backwards on screen at layout container {step}, to y={y:.0f} x={x:.0f}",
             )
         )
 

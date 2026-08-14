@@ -14,6 +14,24 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     PYTHONPATH: /opt/project/src
     DUCKDB_PATH: /opt/project/data/warehouse/vn_air_quality_weather.duckdb
+    # Airflow 3 runs a scheduled task in a supervised subprocess that calls back
+    # into the Task Execution API. The default is http://localhost:8080/execution/,
+    # which is only correct for `airflow standalone`. Here the API server is a
+    # separate container, so localhost:8080 refuses the connection and every
+    # scheduled task dies immediately -- after flushing "Pre Execute" and before
+    # writing any traceback, so the task log looks empty rather than broken.
+    # `airflow dags test` runs in-process and never touches this path, which is
+    # why every DAG check in this repository passed while nothing could be
+    # scheduled. See finding M.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    # The supervisor signs a JWT to call the API above. With [api_auth] jwt_secret
+    # unset each container generates its own at startup, so the scheduler's token
+    # is not valid at the API server and every task dies with "Invalid auth token"
+    # -- again with no traceback in the task log. All containers must share one.
+    # Dev-grade on purpose, like SIMPLE_AUTH_MANAGER_USERS above: this stack binds
+    # to localhost and is not production-ready. Override AIRFLOW_JWT_SECRET in .env
+    # for anything that is not a local machine.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-local-dev-shared-jwt-secret}
   volumes:
     - ./dags:/opt/airflow/dags
     # src is mounted, not only baked into the image. PYTHONPATH points at

@@ -9,12 +9,16 @@ import pytest
 
 from dashboard.keyboard_a11y import (
     ElementSnapshot,
+    FocusCycleDetector,
+    FocusStop,
+    LayoutBox,
     focus_indicator_changed,
     focus_indicator_visible,
     focus_order_regressions,
     is_interactive,
     is_keyboard_reachable,
     positive_tabindex_elements,
+    reading_order_regressions,
     unreachable_interactive_elements,
 )
 
@@ -244,3 +248,158 @@ def test_focus_order_tolerates_repeated_positions() -> None:
 
 def test_focus_order_handles_an_empty_sequence() -> None:
     assert focus_order_regressions([]) == []
+
+
+def test_repeated_focus_element_limits_the_walk_to_one_cycle() -> None:
+    detector = FocusCycleDetector()
+    judged: list[str] = []
+
+    for focus_id in ["sidebar-home", "main-scroll", "main-filter", "sidebar-home"]:
+        if detector.should_stop(
+            focus_id,
+            in_main=focus_id.startswith("main-"),
+            is_body=False,
+        ):
+            break
+        judged.append(focus_id)
+
+    assert judged == ["sidebar-home", "main-scroll", "main-filter"]
+
+
+def test_body_ends_the_walk_only_after_focus_has_entered_main() -> None:
+    detector = FocusCycleDetector()
+
+    assert detector.should_stop(None, in_main=False, is_body=True) is False
+    assert detector.should_stop("sidebar-home", in_main=False, is_body=False) is False
+    assert detector.should_stop("main-filter", in_main=True, is_body=False) is False
+    assert detector.should_stop(None, in_main=False, is_body=True) is True
+
+
+# --- WCAG 2.4.3 reading order ------------------------------------------------
+#
+# Every case below is a shape that was measured on the real dashboard and got
+# reported as a defect by an earlier version of this rule. Coordinates are the
+# measured ones, so a regression here is a regression against the real page.
+
+ROW = LayoutBox("row", y=100, x=0, width=1000, height=400)
+
+
+def _stop(*boxes: LayoutBox) -> FocusStop:
+    return FocusStop(path=tuple(boxes))
+
+
+def test_moving_from_the_left_column_to_the_right_column_is_not_a_regression() -> None:
+    """Down the left column, then up to the top of the right one, is correct order.
+
+    The measured case: /history at 1280 puts the filter form in the left column and
+    a chart in the right. Tab leaves the submit button at y=752 and lands on the
+    chart at y=389 -- 363px *up* the page, and perfectly sensible to a reader.
+    """
+
+    left = LayoutBox("left", y=100, x=0, width=500, height=400)
+    right = LayoutBox("right", y=100, x=500, width=500, height=400)
+
+    stops = [
+        _stop(ROW, left, LayoutBox("submit", y=452, x=0, width=200, height=40)),
+        _stop(ROW, right, LayoutBox("chart", y=110, x=500, width=400, height=200)),
+    ]
+
+    assert reading_order_regressions(stops) == []
+
+
+def test_reversing_two_columns_visually_is_a_regression() -> None:
+    """A CSS `order` swap leaves document order alone and reverses what is read.
+
+    This is the mutation the gate is proven against: without it the rule could be
+    satisfied by comparing document order, which cannot see this at all.
+    """
+
+    visually_right = LayoutBox("first-in-dom", y=100, x=500, width=500, height=400)
+    visually_left = LayoutBox("second-in-dom", y=100, x=0, width=500, height=400)
+
+    stops = [
+        _stop(ROW, visually_right, LayoutBox("a", y=110, x=500, width=100, height=40)),
+        _stop(ROW, visually_left, LayoutBox("b", y=110, x=0, width=100, height=40)),
+    ]
+
+    regressions = reading_order_regressions(stops)
+    assert len(regressions) == 1
+    assert regressions[0][0] == 1
+
+
+def test_two_stops_inside_one_widget_are_not_compared() -> None:
+    """A chart's toolbar sits at its own top right; the canvas sits below and left.
+
+    Measured on /pipeline_health: toolbar at x=1106, grid canvas at x=381, same
+    widget. Comparing them reported a 793px jump left. The widget owns its own
+    internal order, and this project does not author it.
+    """
+
+    widget = LayoutBox("widget", y=380, x=380, width=820, height=220)
+    stops = [
+        _stop(ROW, widget, LayoutBox("toolbar", y=389, x=1106, width=90, height=24)),
+        _stop(ROW, widget, LayoutBox("canvas", y=504, x=381, width=800, height=100)),
+    ]
+
+    assert reading_order_regressions(stops) == []
+
+
+def test_a_container_drawn_inside_another_is_layered_not_sequenced() -> None:
+    """The map draws its layer picker on top of itself.
+
+    Measured on /national_map at 1280: the map container is 820x620 at y=180 and the
+    picker is 495x60 at y=488, inside it. They are DOM siblings that overlap on
+    screen, so there is no before-and-after between them to get wrong.
+    """
+
+    picker = LayoutBox("picker", y=488, x=380, width=495, height=60)
+    map_box = LayoutBox("map", y=180, x=380, width=820, height=620)
+
+    stops = [
+        _stop(ROW, picker, LayoutBox("radio", y=490, x=390, width=100, height=30)),
+        _stop(ROW, map_box, LayoutBox("canvas", y=200, x=380, width=820, height=600)),
+    ]
+
+    assert reading_order_regressions(stops) == []
+
+
+def test_returning_to_an_earlier_container_is_a_regression() -> None:
+    """Leaving a container and coming back to it is a real backwards jump."""
+
+    first = LayoutBox("first", y=100, x=0, width=1000, height=50)
+    second = LayoutBox("second", y=200, x=0, width=1000, height=50)
+
+    stops = [
+        _stop(ROW, first, LayoutBox("a", y=110, x=0, width=100, height=30)),
+        _stop(ROW, second, LayoutBox("b", y=210, x=0, width=100, height=30)),
+        _stop(ROW, first, LayoutBox("c", y=120, x=200, width=100, height=30)),
+    ]
+
+    regressions = reading_order_regressions(stops)
+    assert len(regressions) == 1
+    assert regressions[0][0] == 2
+
+
+def test_a_stop_outside_every_layout_container_is_skipped() -> None:
+    """Streamlit's scrollable main region takes a Tab stop and is not a control.
+
+    It is a 980x800 box whose corner sits at y=0, so including it put a jump to the
+    top of the document into the sequence on every page.
+    """
+
+    widget = LayoutBox("widget", y=400, x=0, width=500, height=50)
+    stops = [
+        _stop(widget, LayoutBox("a", y=410, x=0, width=100, height=30)),
+        FocusStop(path=()),  # the scroll region
+        _stop(widget, LayoutBox("b", y=410, x=200, width=100, height=30)),
+    ]
+
+    assert reading_order_regressions(stops) == []
+
+
+def test_layout_box_containment_is_not_symmetric() -> None:
+    outer = LayoutBox("outer", y=0, x=0, width=100, height=100)
+    inner = LayoutBox("inner", y=10, x=10, width=50, height=50)
+
+    assert outer.contains(inner) is True
+    assert inner.contains(outer) is False

@@ -14,7 +14,7 @@ Kept free of Playwright so the rules can be tested offline. The browser adapter 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Elements that are operable by pointer and therefore must be operable by keyboard.
 # `a` is deliberately absent: an anchor without href is not interactive, so it is
@@ -73,6 +73,44 @@ class ElementSnapshot:
     # Whether the enclosing Streamlit widget holds some other element that Tab can
     # reach. See `unreachable_interactive_elements` for why 2.1.1 turns on this.
     function_reachable_in_widget: bool = False
+
+
+@dataclass(slots=True)
+class FocusCycleDetector:
+    """Decide when a real Tab walk has completed one whole focus cycle.
+
+    The browser adapter supplies a stable identifier for each focused element and
+    whether that element is inside Streamlit's main region. The detector owns the
+    judgement: revisiting any element means the sequence has wrapped, while falling
+    back to ``body`` ends the walk only after focus has reached ``stMain`` at least
+    once. The repeated/body stop is not part of the sequence being judged.
+
+    A generous browser-side press limit may remain as a safety ceiling for a broken
+    page, but it must never define the measured sequence. This state machine makes
+    the result independent of that ceiling once a real cycle is observed.
+    """
+
+    visited_focus_ids: set[str] = field(default_factory=set)
+    entered_main: bool = False
+
+    def should_stop(
+        self,
+        focus_id: str | None,
+        *,
+        in_main: bool,
+        is_body: bool,
+    ) -> bool:
+        """Return whether the current observation closes the focus walk."""
+
+        if is_body:
+            return self.entered_main
+        if focus_id is None:
+            return False
+        if focus_id in self.visited_focus_ids:
+            return True
+        self.visited_focus_ids.add(focus_id)
+        self.entered_main = self.entered_main or in_main
+        return False
 
 
 def _parsed_tabindex(tabindex: str | None) -> int | None:
@@ -204,6 +242,138 @@ def positive_tabindex_elements(
 # which is what lets a left-to-right row of buttons pass.
 SAME_ROW_TOLERANCE_PX = 8.0
 
+# Streamlit lays a page out in containers: `stElementContainer` wraps one widget,
+# `stHorizontalBlock` wraps a row of columns. Those containers are exactly where this
+# project's ordering decisions live -- which column a thing goes in, and the order the
+# elements were written. What happens *inside* one widget is authored by Streamlit or
+# by a third-party component.
+LAYOUT_CONTAINER_TESTIDS: frozenset[str] = frozenset({"stElementContainer", "stHorizontalBlock"})
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutBox:
+    """One layout container on the path to a focused element."""
+
+    key: str
+    y: float
+    x: float
+    width: float = 0.0
+    height: float = 0.0
+
+    def contains(self, other: LayoutBox) -> bool:
+        """Whether this box fully encloses another on screen."""
+
+        return (
+            self.y <= other.y
+            and self.x <= other.x
+            and self.y + self.height >= other.y + other.height
+            and self.x + self.width >= other.x + other.width
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FocusStop:
+    """One Tab stop, reduced to what 2.4.3 is judged on.
+
+    `path` runs outermost container first. It is empty for a stop inside no layout
+    container at all. The only one in this app is the main region itself: Streamlit
+    gives the scrollable `<section data-testid="stMain">` a tab stop so a keyboard
+    user can scroll it, which is a 2.1.1 *feature*. It is a 980x800 region rather
+    than a control, and comparing its corner against real controls put a spurious
+    jump to y=0 in the sequence on every page.
+    """
+
+    path: tuple[LayoutBox, ...]
+
+
+def _moved_backwards(
+    previous: tuple[float, float],
+    current: tuple[float, float],
+    row_tolerance: float,
+) -> bool:
+    """Whether the second position reads before the first on screen."""
+
+    previous_y, previous_x = previous
+    current_y, current_x = current
+    moved_up = current_y < previous_y - row_tolerance
+    same_row = abs(current_y - previous_y) <= row_tolerance
+    moved_left_in_row = same_row and current_x < previous_x - row_tolerance
+    return moved_up or moved_left_in_row
+
+
+def _first_divergence(
+    before: tuple[LayoutBox, ...],
+    after: tuple[LayoutBox, ...],
+) -> tuple[LayoutBox, LayoutBox] | None:
+    """The outermost pair of containers where two stops stop sharing a path.
+
+    None when one path is a prefix of the other, which means one element is nested
+    inside the other's container: the same reading position, nothing to compare.
+    """
+
+    for outer, inner in zip(before, after, strict=False):
+        if outer.key != inner.key:
+            return outer, inner
+    return None
+
+
+def reading_order_regressions(
+    stops: list[FocusStop],
+    *,
+    row_tolerance: float = SAME_ROW_TOLERANCE_PX,
+) -> list[tuple[int, tuple[float, float]]]:
+    """Transitions where Tab jumped backwards in the reading order -- 2.4.3 failures.
+
+    Reading order in a column layout is **hierarchical**, not a flat top-to-bottom
+    sweep, and that is what a flat comparison of leaf positions kept getting wrong.
+    Going down the left column and then up to the top of the right column moves the
+    focused element hundreds of pixels *up* the page while reading perfectly
+    sensibly. So two stops are compared at the outermost container where their paths
+    diverge: same row, different column -> judged left-to-right; same column,
+    different widget -> judged top-to-bottom; same widget -> not compared at all.
+
+    That last case is deliberate. Three false-positive classes were all
+    widget-internal, and none is this project's to order:
+
+    * a chart's hover toolbar is absolutely positioned at the top right of its own
+      widget, so reaching it before the chart body read as a jump up and right;
+    * `st.dataframe` renders its toolbar and its grid canvas in one container, so
+      toolbar-then-canvas read as a 793px jump left;
+    * the map's attribution control sits at the bottom of the map while its
+      navigation button sits at the top, both inside the one map widget.
+
+    Comparing containers by **visual** position rather than document order is what
+    keeps this able to fail. A CSS `order` that swaps two columns leaves document
+    order untouched while reversing what a reader sees -- the textbook 2.4.3
+    violation -- and only a visual comparison catches it.
+
+    The honest limit: a bad focus order *within* one widget is not reported.
+    """
+
+    regressions: list[tuple[int, tuple[float, float]]] = []
+    previous: FocusStop | None = None
+    for index, stop in enumerate(stops):
+        if not stop.path:
+            continue
+        if previous is not None:
+            divergence = _first_divergence(previous.path, stop.path)
+            if divergence is not None:
+                before, after = divergence
+                # One container drawn inside the other is layered, not sequenced, so
+                # there is no before-and-after between them to get wrong. Two real
+                # cases: the map draws its layer-picker on top of itself, and
+                # `st.dataframe` wraps its virtualised grid in a box that starts above
+                # the document origin. Both are siblings in the DOM that overlap on
+                # screen, and comparing their corners produced a jump of hundreds of
+                # pixels where a reader sees focus stay inside one component.
+                layered = before.contains(after) or after.contains(before)
+                if not layered and _moved_backwards(
+                    (before.y, before.x), (after.y, after.x), row_tolerance
+                ):
+                    regressions.append((index, (after.y, after.x)))
+        previous = stop
+    return regressions
+
 
 def focus_order_regressions(
     positions: list[tuple[float, float]],
@@ -230,11 +400,6 @@ def focus_order_regressions(
 
     regressions: list[tuple[int, tuple[float, float]]] = []
     for step in range(1, len(positions)):
-        previous_y, previous_x = positions[step - 1]
-        current_y, current_x = positions[step]
-        moved_up = current_y < previous_y - row_tolerance
-        same_row = abs(current_y - previous_y) <= row_tolerance
-        moved_left_in_row = same_row and current_x < previous_x - row_tolerance
-        if moved_up or moved_left_in_row:
+        if _moved_backwards(positions[step - 1], positions[step], row_tolerance):
             regressions.append((step, positions[step]))
     return regressions

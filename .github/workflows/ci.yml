@@ -96,5 +96,18 @@ jobs:
       - name: Import Airflow DAGs in the runtime image
         run: |
           docker compose -f airflow/docker-compose.yml build airflow-scheduler
+          # This is the only check that exercises timetable semantics in real Airflow;
+          # host pytest guards the source declaration only.
           docker compose -f airflow/docker-compose.yml run --rm --no-deps airflow-scheduler \
-            python -c "from airflow.models import DagBag; bag = DagBag('/opt/airflow/dags'); print('DAGS=', sorted(bag.dag_ids)); print('IMPORT_ERRORS=', bag.import_errors); assert not bag.import_errors"
+            python -c "from airflow.models import DagBag; \
+            import pendulum; \
+            bag = DagBag('/opt/airflow/dags'); \
+            print('DAGS=', sorted(bag.dag_ids)); \
+            print('IMPORT_ERRORS=', bag.import_errors); \
+            assert not bag.import_errors, bag.import_errors; \
+            daily = bag.get_dag('vn_air_quality_weather_daily'); \
+            assert type(daily.timetable).__name__ == 'CronDataIntervalTimetable', f'daily run_after=2026-08-14T02:00Z requires CronDataIntervalTimetable, got {type(daily.timetable).__name__}'; \
+            di = daily.timetable.infer_manual_data_interval(run_after=pendulum.datetime(2026, 8, 14, 2, 0, tz='UTC')); \
+            assert di.start.date().isoformat() == '2026-08-13', f'daily run_after=2026-08-14T02:00Z resolved data_interval_start={di.start.date()}'; \
+            forecast = bag.get_dag('vn_air_quality_weather_forecast'); \
+            assert type(forecast.timetable).__name__ == 'CronTriggerTimetable', type(forecast.timetable).__name__"

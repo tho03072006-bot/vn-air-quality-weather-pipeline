@@ -26,7 +26,7 @@ Every figure below was measured at handover, not estimated.
 | Lint | `ruff check .` | pass |
 | Unit tests | `pytest` | **300 passed**, coverage 89.76% |
 | Contrast | `python scripts/verify_a11y.py` | **18/18** (9 pages x 2 viewports) |
-| Keyboard | `python scripts/verify_keyboard.py` | **no blocking findings**; 23 advisory (2.4.3) |
+| Keyboard | `python scripts/verify_keyboard.py` | **0 findings**; 2.1.1, 2.4.7 and 2.4.3 all enforced |
 | dbt | `dbt build` | **PASS=129, ERROR=0** |
 | Source freshness | `dbt source freshness` | pass |
 | Dashboard | `python scripts/verify_streamlit.py` | **10/10** (9 pages + interactions) |
@@ -35,7 +35,8 @@ Every figure below was measured at handover, not estimated.
 | Compose | `docker compose -f airflow/docker-compose.yml config` | exit 0 |
 | Airflow DagBag | `airflow dags list-import-errors` | **0 import errors**, both DAGs registered and paused |
 | Airflow pool | `airflow pools list` | `warehouse_writer` present, **1 slot** |
-| **Airflow end-to-end** | `airflow dags test vn_air_quality_weather_forecast` | **success, 4/4 tasks, 36.8s**, 34/34 locations, dbt PASS=129 |
+| Airflow task code | `airflow dags test vn_air_quality_weather_forecast` | success, 4/4 tasks, 36.8s, 34/34 locations, dbt PASS=129. **In-process — this does not exercise the scheduler**, see the row below and finding M |
+| **Airflow scheduled execution** | `.\scripts\verify_airflow_scheduling.ps1` | **success, 4/4 tasks, 32s** via `dags trigger` — the executor and Task Execution API path |
 | Whitespace | `git diff --check` | exit 0 |
 | Secret scan | `git grep` over tracked files | 2 known-benign hits |
 
@@ -179,6 +180,18 @@ Recorded so they do not cost it twice.
 - **The Airflow image bakes `src/`.** `dags/` is bind-mounted, so DAG edits apply
   immediately while library edits do not. `../src` is now mounted too; without that
   the two drift silently and only the DagBag test notices.
+- **`airflow dags test` is not evidence that anything can be scheduled.** It runs
+  every task in-process, so it never touches the executor and never authenticates
+  to the Task Execution API. Two settings were missing that made every scheduled
+  task die with an empty log, and `dags test` reported 4/4 success throughout.
+  `scripts/verify_airflow_scheduling.ps1` drives `dags trigger` instead, which is
+  the real path. Finding M has the measurements. The general form: a check that
+  runs the work in its own process cannot tell you the scheduler can run it.
+- **A failing Airflow task can leave a log containing one line and no error.** If
+  the supervisor dies during startup the task log holds only the buffered
+  `Pre Execute` entry. The real traceback is in the **scheduler** container log,
+  not the task log. Reach for `docker logs airflow-airflow-scheduler-1` before
+  concluding there is no error to find.
 - **A green test suite is not evidence the app looks right.** Four display defects
   passed 141 tests and ten page assertions. Every one needed a human eye.
 - **Fixtures that cannot reach the broken state make tests pass vacuously.** Three

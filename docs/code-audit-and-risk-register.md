@@ -611,11 +611,11 @@ threshold.
 
 ---
 
-## K. Keyboard access was never measured — P1, mostly resolved
+## K. Keyboard access was never measured — P1, resolved
 
-`scripts/verify_keyboard.py` now audits WCAG 2.1.1 (Keyboard), 2.4.7 (Focus Visible)
-and 2.4.3 (Focus Order) across nine pages at two viewports. 2.1.1 and 2.4.7 are
-enforced and pass; 2.4.3 is reported but advisory, for the reason below.
+`scripts/verify_keyboard.py` audits WCAG 2.1.1 (Keyboard), 2.4.7 (Focus Visible) and
+2.4.3 (Focus Order) across nine pages at two viewports. **All three are enforced and
+pass.**
 
 **One real defect, fixed.** Under a real Tab press the date-range input, the
 multiselect input and the chart canvases looked identical focused and unfocused, so a
@@ -634,10 +634,31 @@ page:
 | DOM index as the order | backwards jumps on six page/viewport pairs | Streamlit portals paint at the top while living at the end of the document. Visual position is what 2.4.3 actually means |
 | `closest('[data-testid]')` for widget scope | both number-input steppers on every viewport | That testid is the stepper column itself; the reachable input sits one level further out |
 
-**2.4.3 stays advisory.** After four measurement strategies a residue remains on
-several pages that could not be attributed to a real defect with confidence. This
-project's own rule is that a check which misreports is worse than no check, so it
-prints and a human decides. Promoting it to blocking is the next piece of work.
+**2.4.3 is now enforced too.** It was advisory for as long as its measurement still
+misreported. Seven wrong measurements were removed before the output could be
+believed, and the last three are worth recording because they only look obvious
+afterwards:
+
+| Measured by | Findings it invented | Why it was wrong |
+|---|---|---|
+| leaf position, across columns | 11 | reading order in a column layout is hierarchical: down the left column, then up to the top of the right. Comparing leaves flat calls that 363px jump a defect |
+| invisible elements included | 10 | Streamlit gives every heading an `opacity: 0` anchor link that Tab lands on. Judging a reading order against something no reader can see is judging noise |
+| container position during the walk | 3 | focusing opens a time picker and scrolls the page; one container measured 439px from where it sits at rest |
+
+The last three survived every other correction on a page whose DOM order was
+separately measured to match its visual order exactly — 0 breaks across 17
+controls. That check is what showed the gate was wrong rather than the page.
+
+Findings fell **37 → 0** on the fixture warehouse and 0 on the live warehouse, and
+the gate keeps its teeth: a CSS `order` that reverses two columns while leaving
+document order untouched — the textbook 2.4.3 violation — takes it from 0 findings
+to 8 and exit 0 to exit 1. `ADVISORY_CRITERIA` is now empty.
+
+**Two scope limits, stated rather than hidden.** A bad focus order *inside* one
+widget is not reported, because a widget's internal order is authored by Streamlit
+or a third-party component and not by this project. And an element that is
+invisible is judged for reachability and focus appearance but not for its place in
+the reading order.
 
 **A separate trap, worth its own line.** The `:focus-visible` fix was written, looked
 correct in `app.py`, and did nothing — because a CSS comment in the same block
@@ -663,6 +684,95 @@ the task fetches `2026-08-13`. This is a local DAG contract, not a global Airflo
 configuration change: the forecast DAG keeps its trigger timetable. Any future DAG
 that derives a date from `data_interval_start` must make the same interval semantics
 explicit rather than relying on a bare cron string.
+
+---
+
+## M. No scheduled task had ever executed, and every check said otherwise — P0
+
+Found by unpausing a DAG for the first time. Both DAGs failed every scheduled run
+while `airflow dags test` kept reporting success.
+
+**The failure, in two parts.** Airflow 3 executes a scheduled task in a supervised
+subprocess that authenticates to the Task Execution API with a signed JWT. Both
+halves of that sentence were misconfigured:
+
+| # | Setting | Left unset it means | Symptom |
+|---|---|---|---|
+| 1 | `AIRFLOW__CORE__EXECUTION_API_SERVER_URL` | defaults to `http://localhost:8080/execution/`, correct only for `airflow standalone` | from the scheduler container the address refuses the connection |
+| 2 | `AIRFLOW__API_AUTH__JWT_SECRET` | each container generates its own at startup | the scheduler's token does not validate at the API server: `ServerResponseError: Invalid auth token` |
+
+Both kill the task process before it can write a traceback, after one buffered
+line has already been flushed, so every task log read in full:
+
+```json
+{"event":"::group::Pre Execute","logger":"task", ...}
+```
+
+No error, no exception, no traceback anywhere in the log tree — `grep -i
+"error|traceback|exception"` over the whole tree returned nothing. The containers
+were healthy: `restarts=0`, `oom=false`, 909 MB of 7.4 GB in use. The obvious
+suspects were measured and cleared: `OPENAQ_API_KEY` was present in the container,
+and the timetable from finding L was resolving its interval correctly.
+
+Fixing (1) is what made (2) visible. Only once the supervisor could reach the API
+server did it get an answer worth logging, and the real error appeared in the
+**scheduler** log rather than the task log:
+
+```
+supervisor.py:1359, in _on_child_started
+airflow.sdk.api.client.ServerResponseError: Invalid auth token
+Process exited  exit_code=<Negsignal.SIGKILL: -9>
+```
+
+**Why every existing check passed.** `airflow dags test` runs each task
+**in-process**. It never reaches the executor and never authenticates to the Task
+Execution API, so it cannot observe this class of failure at all. Measured, with
+both settings still broken:
+
+```
+airflow dags test vn_air_quality_weather_forecast
+  -> 4/4 tasks new_state=success
+  -> Marking run ... successful, run_duration=38.2s
+  -> exit 0
+```
+
+That is the whole problem in four lines: a green end-to-end check on a system
+that could not run a single task unattended.
+
+That makes this the third rung of one ladder, and the pattern matters more than
+the bug:
+
+| Check | What it proves | What it still cannot see |
+|---|---|---|
+| `DagBag` import | the file parses | nothing runs |
+| `airflow dags test` | the task code works | the scheduler path is never touched |
+| `airflow dags trigger` | the executor and Execution API work | — |
+
+Each rung looked like end-to-end proof at the time it was adopted. Finding J
+records the first move up it; this is the second, and it was bought at the cost of
+a system that had never once run unattended while its documentation said it had.
+
+**The fix.** `airflow/docker-compose.yml` now sets both settings, with comments at
+the point of use. `scripts/verify_airflow_scheduling.ps1` drives a real run
+through `airflow dags trigger` and fails when it does not reach `success`. Like
+the browser gates it needs a running service, so it stays out of
+`scripts/verify.ps1`, which is contractually offline. It restores the DAG's
+original paused state when it finishes.
+
+Proven discriminating rather than assumed, by disabling the shared secret and
+re-running everything:
+
+| Check | Config broken | Config correct |
+|---|---|---|
+| `verify_airflow_scheduling.ps1` | **exit 1**, `validate_configuration` up_for_retry | **exit 0**, 4/4 success in 32s |
+| `airflow dags test` | **exit 0**, 4/4 "success" | exit 0, 4/4 success |
+
+The first scheduled-path execution in this project's history is
+`verify_scheduling__1786717365`, 2026-08-14.
+
+**The rule this leaves behind.** A check that runs the work in its own process is
+not evidence that the scheduler can run it. Anything claiming a pipeline runs
+unattended has to exercise the unattended path.
 
 ---
 
