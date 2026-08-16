@@ -22,14 +22,14 @@ Every figure below was measured at handover, not estimated.
 
 | Gate | Command | Result |
 |---|---|---|
-| Format | `ruff format --check .` | 73 files clean |
+| Format | `ruff format --check .` | 88 files clean |
 | Lint | `ruff check .` | pass |
-| Unit tests | `pytest` | **300 passed**, coverage 89.76% |
+| Unit tests | `pytest` | **309 passed, 1 skipped**, coverage 89.76% |
 | Contrast | `python scripts/verify_a11y.py` | **18/18** (9 pages x 2 viewports) |
 | Keyboard | `python scripts/verify_keyboard.py` | **0 findings**; 2.1.1, 2.4.7 and 2.4.3 all enforced |
-| dbt | `dbt build` | **PASS=129, ERROR=0** |
+| dbt | `dbt build` | **PASS=130, ERROR=0** |
 | Source freshness | `dbt source freshness` | pass |
-| Dashboard | `python scripts/verify_streamlit.py` | **10/10** (9 pages + interactions) |
+| Dashboard | `python scripts/verify_streamlit.py` | **16/16** (9 fresh pages + interactions + 6 exhausted pages) |
 | Layout | `python scripts/verify_layout.py` | **18/18** (9 pages x 2 viewports) |
 | Byte-compile | `compileall src dashboard airflow/dags scripts` | exit 0 |
 | Compose | `docker compose -f airflow/docker-compose.yml config` | exit 0 |
@@ -194,9 +194,19 @@ Recorded so they do not cost it twice.
   concluding there is no error to find.
 - **A green test suite is not evidence the app looks right.** Four display defects
   passed 141 tests and ten page assertions. Every one needed a human eye.
-- **Fixtures that cannot reach the broken state make tests pass vacuously.** Three
+- **Fixtures that cannot reach the broken state make tests pass vacuously.** Four
   fixes were initially unprovable for this reason. When adding a test, check it
   fails against the old behaviour before trusting it.
+- **A frozen warehouse has a shelf life.** Any mart anchored to
+  `current_timestamp` changes meaning as the query clock moves even when the file
+  itself does not change; rows can age out until the result is empty. Any plan that
+  relies on a prebuilt warehouse must answer how long that warehouse remains valid
+  before it is treated as a usable data source.
+- **PowerShell 5.1: do not pipe a native executable's `2>&1` output when `$?`
+  matters.** PowerShell wraps each stderr line as `NativeCommandError` and sets
+  `$?` to false even when the native exit code is 0. Streamlit writes warnings to
+  stderr, so this made `verify.ps1` report a false failure twice in succession
+  before the invocation pattern was identified as the cause.
 - **A check that cannot pass on correct code is worse than no check.** Four have now
   been written here and corrected rather than shipped. The newest two: a clipped-text
   detector that included SVG `<text>` nodes, which do not use the box model and so
@@ -221,9 +231,10 @@ In order:
 1. [implementation-roadmap.md](implementation-roadmap.md) Phase 6 — the production
    roadmap, with a table of what must be decided before each item can be built
    honestly. Items 3–5 there are the only route to publishing an accuracy figure.
-2. Extend `verify_layout.py` where it is still thin: it measures two viewports and
-   the default filter state only. The stale, empty and error states of each page are
-   still unmeasured, and a tablet width is not covered.
+2. Extend state coverage where it is still thin. The exhausted/stale state is now
+   measured by the second warehouse branch in `verify_streamlit.py`; empty and error
+   states remain unmeasured, and `verify_layout.py` still does not cover a tablet
+   width.
 3. Accessibility remains the largest unverified area: contrast ratios and typography
    have never been checked, by eye or by measurement. Both are measurable from the
    DOM the same way the layout checks are, so this is now a smaller job than it was.

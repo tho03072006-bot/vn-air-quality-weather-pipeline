@@ -776,6 +776,91 @@ unattended has to exercise the unattended path.
 
 ---
 
+## N. A frozen warehouse silently outlived its forecast horizon — P0, resolved
+
+**The observed failure.** A committed or otherwise frozen warehouse did not keep
+serving the same state indefinitely. Before the fix, replaying the serving
+predicate against `ci.duckdb` showed its finite shelf life:
+
+| Query clock | Forecast hours retained by the old predicate |
+|---|---:|
+| `now+0h` | 1326 |
+| `now+36h` | 102 |
+| `now+48h` | **0** |
+
+Once that predicate retained no forecast hours, the reader pages had no honest
+way to distinguish "the horizon is exhausted" from "the pipeline never produced
+data". Empty-state copy then exposed operational shell commands instead of stating
+the data truth, and a last-known map risked presenting expired values as a current
+geographic assessment.
+
+**Root cause: two clocks.** The fixture anchored each forecast vintage to `now` at
+fixture-build time. The serving mart evaluated `current_timestamp` later, at query
+time. Neither clock was wrong in isolation; the defect was that they were allowed
+to drift apart while every fixture and gate assumed they still described the same
+72-hour horizon. `--start-date` did not help: `build_demo_warehouse.py` always
+generated forecasts from `now` through `now+72h`, regardless of the historical
+start date.
+
+**Why no existing check caught it.** The exhausted state could not be constructed.
+Every dbt and Streamlit check received a fresh horizon, so a branch for expiry could
+be missing, misleading or dead while the suite stayed green. This is the **fourth
+instance** of the recurring lesson already recorded in this register and handover:
+a fixture that cannot reach the broken state makes the test pass vacuously.
+
+**The fix.** The fixture now accepts `--forecast-age-hours`; a value of 96 moves
+both forecast vintages far enough into the past to build the exhausted state. The
+serving mart keeps one explicit last-known row per location, publishes the horizon
+end and `is_forecast_horizon_exhausted`, and marks the rows STALE instead of silently
+filtering every row away. The measured distinction is:
+
+| Measurement | Exhausted fixture (96h) | Fresh fixture |
+|---|---:|---:|
+| Rows in `mart_current_conditions` | 34 | 34 |
+| `is_forecast_horizon_exhausted` | 34 | 0 |
+| `valid_at = forecast_horizon_end_utc` | 34 | 0 |
+| `freshness_status` | STALE ×34 | FRESH ×34 |
+| Rows retained by the old pre-filter | **0** | 2448 |
+
+The six reader-facing pages consume the flag defensively with `.get()`, state the
+vintage and age, and do not turn an expired snapshot into a recommendation. The
+number of operational-command leaks on reader pages fell from **6 to 0**.
+
+**The map decision is deliberately stronger than a STALE badge.** Finding I records
+that colour is the data on `national_map`: 34 points are coloured against the
+QĐ 1459 scale. A badge in one corner cannot outweigh 34 current-looking coloured
+markers. When the horizon is exhausted the page therefore removes every coloured
+marker rather than displaying last-known markers with a STALE badge. The accessible
+table remains, with the expired state expressed as text.
+
+`trust.py` deliberately does **not** stop. It is the page that explains whether a
+number should be believed, so it is most necessary when the answer is "do not rely
+on this expired snapshot". It shows the exhausted state, vintage and age before the
+rest of the provenance and limitation evidence.
+
+**Mutation proof.** Each mutation failed only the page whose protection was removed;
+the fresh branch remained PASS throughout:
+
+| Mutation | Discriminating failure |
+|---|---|
+| M1: insert `python -m ...` into Today's exhausted message | exit 1, `rendered forbidden operational command` |
+| M2: change `if horizon_exhausted:` to `if False:` in `national_map` | exit 1, `rendered 1 coloured PyDeck marker map(s) after the forecast horizon expired` |
+| M3: remove Today's exhausted-horizon guard | exit 1, all three required exhausted-state strings missing |
+
+Reverting all three mutations returns exit 0. Final gates: Ruff reports 88 files
+clean; pytest reports 309 passed and 1 skipped; `dbt build` reports PASS=130,
+ERROR=0; Streamlit reports 16/16; and `verify.ps1` exits 0.
+
+**The rules this leaves behind.** Any fixture for a mart anchored to
+`current_timestamp` must be able to move the data clock independently of the query
+clock and must exercise both sides of every age boundary. A green test is not proof
+until a mutation of the guarded branch makes it fail. When colour is the primary
+data encoding, an expired-state badge is not an adequate override: remove the
+encoding and retain the textual equivalent. Explanation surfaces such as Trust stay
+available precisely when decision surfaces must stop.
+
+---
+
 ## Data-product limitations to disclose, not silently fix — P2
 
 These are honest modelling limits. They must be visible in the UI and in

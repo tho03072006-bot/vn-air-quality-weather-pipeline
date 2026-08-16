@@ -242,7 +242,7 @@ are asserted; driving the form belongs with the outstanding interaction work in 
 
 | # | Item | Status |
 |---|---|---|
-| 5.1 | AppTest content assertions | **done** — history form now driven too |
+| 5.1 | AppTest content assertions | **done** — fresh and exhausted warehouses; history form driven too |
 | 5.2 | Accessibility pass: contrast, keyboard, colour-independence, table equivalents | **done** — contrast 18/18; keyboard 2.1.1 and 2.4.7 enforced and passing, 2.4.3 advisory |
 | 5.3 | Performance measurement, then fill the UI spec table with real numbers | **done** |
 | 5.4 | Browser QA | **done** — automated in `scripts/verify_layout.py`; still no screenshots |
@@ -253,6 +253,17 @@ are asserted; driving the form belongs with the outstanding interaction work in 
 its provenance badges. Each page now declares required text, required widget labels,
 a minimum number of data tables, and forbidden strings (`"nan µg/m³"` and friends, so
 the G2 formatting bug cannot come back unnoticed).
+
+**5.1 now has a second warehouse branch.** The original fresh path remains 9 pages
+plus interactions. The second path builds a fixture with
+`--forecast-age-hours 96` and exercises Today, National map, Forecast, Alerts, Trust
+and Compare after the forecast horizon is exhausted. Each page must state the
+exhausted condition, vintage and age; reader-facing output may not expose
+`python -m vn_air_quality_weather` or `dbt build`; and National map must retain its
+accessible table while rendering no coloured PyDeck markers. Together the two paths
+report 16/16. Three mutations independently proved the operational-command guard,
+the map-marker guard and Today's exhausted-state guard fail only the page whose
+protection was removed, while the fresh path remains PASS.
 
 Writing those assertions immediately caught two faults in the checker itself:
 `_widget_labels` omitted `segmented_control` and `pills`, so it reported a missing
@@ -291,8 +302,9 @@ version clicked `app.button[0]`, which is the header's "Đọc lại warehouse" 
 control rather than the form submit, and reported a healthy page as broken. The
 *check* was fixed, not the page.
 
-Still missing from 5.1: stale and missing-data states, and an assertion that no
-network call happens on initial render.
+Still missing from 5.1: empty and error states, and an assertion that no network call
+happens on initial render. The stale/exhausted state is now measured by the second
+warehouse branch.
 
 **5.4 is now automated.** `scripts/verify_layout.py` drives Chromium via Playwright
 across nine pages at 390x844 and 1280x800, measuring chart-versus-container width and
@@ -452,9 +464,10 @@ Recorded here so they are not rediscovered as surprises:
   Geometry is now measured instead, which covers the two defect classes that
   actually shipped; **contrast ratios and typography remain unverified**, and those
   are the parts an image would have helped with.
-- **Only two viewports and one state are measured.** `verify_layout.py` covers
-  390x844 and 1280x800 with default filters. Tablet widths, and the stale, empty and
-  error states of each page, are not measured.
+- **State and viewport coverage remain partial.** `verify_layout.py` covers
+  390x844 and 1280x800 with default filters, so tablet widths remain unmeasured. The
+  stale/exhausted state is now measured by the second warehouse branch in
+  `verify_streamlit.py`; empty and error states are still not measured.
 - **Performance is measured server-side only** (see the UI spec). Browser paint,
   WebGL setup and client-side Altair rendering are unmeasured, and the map is the
   likeliest place for a gap between the two.
