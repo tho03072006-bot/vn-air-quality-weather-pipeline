@@ -4,6 +4,15 @@
 -- hours later it still pointed at the hour that was current when it was built,
 -- with nothing in the data admitting it. As a view the clock is read per query,
 -- and as_of_utc records which clock reading produced the row.
+--
+-- Do not filter expired hours out before ranking. Once the 72-hour horizon has
+-- elapsed that removes every candidate, and "this data is stale" then becomes
+-- indistinguishable from "this location never had data" -- every consumer would
+-- have to re-derive the difference with a second query. Keeping all candidates
+-- lets the view return the last known hour, marked explicitly as exhausted.
+-- Verified behaviour-preserving on a healthy warehouse: with the horizon still
+-- ahead, the nearest hour to now is inside it, so all 34 anchors resolve to the
+-- same row the filtered version chose.
 {{ config(materialized='view') }}
 
 with as_of as (
@@ -13,10 +22,12 @@ with as_of as (
 candidates as (
     select
         forecast.*,
-        as_of.as_of_utc
+        as_of.as_of_utc,
+        max(forecast.valid_at_utc) over (
+            partition by forecast.location_key
+        ) as forecast_horizon_end_utc
     from {{ ref('mart_location_hourly_forecast') }} as forecast
     cross join as_of
-    where forecast.valid_at_utc >= date_trunc('hour', as_of.as_of_utc) - interval '1 hour'
 ),
 
 nearest as (
@@ -36,6 +47,12 @@ select
     cast(round(epoch(as_of_utc - valid_at_utc) / 60.0) as integer) as data_age_minutes,
     cast(round(epoch(as_of_utc - forecast_issued_at_utc) / 60.0) as integer)
         as forecast_age_minutes,
+    -- True once the whole served horizon lies behind the current hour, which is
+    -- exactly when the row above stops being a forecast and becomes a last-known
+    -- reading. Consumers must not present an exhausted row as current.
+    forecast_horizon_end_utc
+        < date_trunc('hour', as_of_utc) - interval '1 hour'
+        as is_forecast_horizon_exhausted,
     -- Thresholds follow the six-hourly forecast cadence rather than round
     -- numbers. One cycle plus slack is still healthy; two missed cycles is not.
     -- Picking 3h here would flag half of every normal cycle as delayed.

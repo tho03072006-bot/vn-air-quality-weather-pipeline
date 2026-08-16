@@ -6,10 +6,16 @@ than defensively, and it reads the live warehouse for the freshness and coverage
 figures instead of describing them in prose that can drift out of date.
 """
 
+import pandas as pd
 import streamlit as st
 
 from dashboard.components import methodology_expander, metric_row
-from dashboard.runtime import cached_current, cached_pipeline_runs, require_warehouse
+from dashboard.runtime import (
+    cached_current,
+    cached_pipeline_runs,
+    forecast_horizon_exhausted_message,
+    require_warehouse,
+)
 from dashboard.view_models import build_metric, format_age, freshness_view
 
 st.title("Độ tin cậy dữ liệu")
@@ -21,6 +27,26 @@ current = cached_current(str(path))
 if current.empty:
     st.warning("Chưa có dữ liệu để đánh giá độ tin cậy.", icon=":material/help:")
     st.stop()
+
+# This page does NOT stop on an exhausted horizon, unlike the pages that recommend
+# something. Explaining whether a number can be trusted is exactly what it exists to
+# do, and it is most needed when the answer is "not this one". The oldest anchor is
+# quoted because it bounds the staleness of everything below.
+horizon_flags = pd.Series(
+    current.get("is_forecast_horizon_exhausted", False),
+    index=current.index,
+    dtype="boolean",
+).fillna(False)
+if bool(horizon_flags.any()):
+    exhausted = current.loc[horizon_flags.astype(bool)].sort_values(
+        "forecast_age_minutes",
+        ascending=False,
+        na_position="last",
+    )
+    st.warning(
+        forecast_horizon_exhausted_message(exhausted.iloc[0]),
+        icon=":material/history_toggle_off:",
+    )
 
 # Measured from the warehouse, not asserted in prose. A page about trust that states
 # its own coverage from memory is the first thing to go stale.

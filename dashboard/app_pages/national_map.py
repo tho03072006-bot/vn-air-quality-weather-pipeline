@@ -6,7 +6,12 @@ import streamlit as st
 
 from dashboard.components import freshness_badge, methodology_expander, metric_row
 from dashboard.map_legend import map_legend_html
-from dashboard.runtime import cached_current, format_local_timestamp, require_warehouse
+from dashboard.runtime import (
+    cached_current,
+    forecast_horizon_exhausted_message,
+    format_local_timestamp,
+    require_warehouse,
+)
 from dashboard.view_models import (
     MAP_METRICS,
     MISSING_DISPLAY,
@@ -33,11 +38,24 @@ path = require_warehouse("dim_province", "mart_current_conditions")
 current = cached_current(str(path))
 if current.empty:
     st.warning(
-        "Chưa có dữ liệu bản đồ toàn quốc. Hãy chạy "
-        "`python -m vn_air_quality_weather.forecast_pipeline --all-provinces` rồi `dbt build`.",
+        "Warehouse chưa có snapshot toàn quốc để hiển thị. "
+        "Bản đồ không thể suy diễn màu từ dữ liệu chưa tồn tại.",
         icon=":material/map:",
     )
     st.stop()
+
+horizon_flags = pd.Series(
+    current.get("is_forecast_horizon_exhausted", False),
+    index=current.index,
+    dtype="boolean",
+).fillna(False)
+horizon_exhausted = bool(horizon_flags.any())
+if horizon_exhausted:
+    expired_row = current.loc[horizon_flags.astype(bool)].iloc[0]
+    st.warning(
+        forecast_horizon_exhausted_message(expired_row),
+        icon=":material/history_toggle_off:",
+    )
 
 with st.container(horizontal=True, horizontal_alignment="left"):
     freshness_badge(current.iloc[0])
@@ -52,15 +70,11 @@ metric_key = st.segmented_control(
 metric = metric_by_key(metric_key or MAP_METRICS[0].key)
 
 points = current.copy()
-# Colour and radius both come from the same band lookup the legend renders, so the
-# key and the map cannot describe different thresholds.
-points["fill_color"] = points[metric.column].map(lambda value: list(band_colour(value, metric)))
-points["marker_radius"] = points[metric.column].map(lambda value: marker_radius(value, metric))
+# The formatted value feeds the accessible table in both branches. Colour, radius
+# and band label are map-only and are derived inside the healthy branch, so an
+# expired snapshot never gets a fill computed for it at all.
 points["metric_display"] = points[metric.column].map(
     lambda value: format_number(value, unit=metric.unit, decimals=metric.decimals)
-)
-points["band_label"] = points[metric.column].map(
-    lambda value: band_for(value, metric).label if band_for(value, metric) else "Không có dữ liệu"
 )
 
 available = int(points[metric.column].notna().sum())
@@ -83,103 +97,128 @@ metric_row(
     ]
 )
 
-# Legend is always visible, and every band carries its numeric range as text. A
-# reader who cannot separate the hues still gets the thresholds.
-st.caption(f"**Thang màu — {metric.label}.** {metric.legend_note}")
-st.html(map_legend_html(metric))
-
-layer = pdk.Layer(
-    "ScatterplotLayer",
-    id="province-anchors",
-    data=points[
-        [
-            "location_key",
-            "province_code",
-            "province_name",
-            "anchor_name",
-            "latitude",
-            "longitude",
-            "fill_color",
-            "marker_radius",
-            "metric_display",
-            "band_label",
-            "decision_label",
-            "confidence_level",
-            "coverage_tier",
-        ]
-    ],
-    get_position="[longitude, latitude]",
-    get_fill_color="fill_color",
-    get_radius="marker_radius",
-    radius_min_pixels=6,
-    radius_max_pixels=26,
-    pickable=True,
-    auto_highlight=True,
-    stroked=True,
-    get_line_color=[255, 255, 255],
-    line_width_min_pixels=1,
-)
-
-deck = pdk.Deck(
-    layers=[layer],
-    initial_view_state=pdk.ViewState(latitude=16.0, longitude=106.5, zoom=4.4),
-    # None so the basemap inherits the configured Streamlit theme instead of
-    # forcing a light tileset into a dark page.
-    map_style=None,
-    tooltip={
-        "html": (
-            "<b>{province_name}</b><br/>"
-            "Điểm đại diện: {anchor_name}<br/>"
-            f"{metric.label}: "
-            "{metric_display} ({band_label})<br/>"
-            "Đánh giá: {decision_label}<br/>"
-            "Tin cậy: {confidence_level} · {coverage_tier}"
-        )
-    },
-)
-
-selection = st.pydeck_chart(
-    deck,
-    width="stretch",
-    height=MAP_HEIGHT,
-    selection_mode="single-object",
-    on_select="rerun",
-    key="national_map",
-)
-
-selected_rows = []
-if selection and getattr(selection, "selection", None):
-    selected_rows = selection.selection.get("objects", {}).get("province-anchors", [])
-
-if selected_rows:
-    chosen = selected_rows[0]
-    match = points[points["location_key"] == chosen.get("location_key")]
-    if not match.empty:
-        row = match.iloc[0]
-        with st.container(border=True):
-            st.subheader(f"{row['province_name']} — {row['anchor_name']}")
-            metric_row(
-                [
-                    build_metric("PM2.5 mô hình", row.get("pm25_ugm3"), unit="µg/m³"),
-                    build_metric("Cảm giác nhiệt", row.get("apparent_temperature_c"), unit="°C"),
-                    build_metric(
-                        "Khả năng mưa",
-                        row.get("precipitation_probability_pct"),
-                        unit="%",
-                        decimals=0,
-                    ),
-                    build_metric(
-                        "Điểm ngoài trời", row.get("outdoor_score"), unit="/100", decimals=0
-                    ),
-                ]
-            )
-            st.write(str(row.get("decision_explanation", "")))
-            st.caption(
-                f"Giờ dự báo: {format_local_timestamp(row.get('valid_at_local'))} · "
-                f"Số liệu tính lúc: {format_local_timestamp(row.get('as_of_utc'))}"
-            )
+if horizon_exhausted:
+    # Keep the last-known values readable as text, but withdraw every visual signal
+    # that could make an expired snapshot read as a current geographic assessment.
+    # On this page colour IS the data -- 34 anchors painted on the QD 1459 ramp --
+    # and a STALE badge in a corner does not outvote 34 coloured dots.
+    points["band_label"] = "Hết hạn"
+    points["decision_label"] = "Hết hạn"
+    points["confidence_level"] = "EXPIRED"
+    st.caption(
+        "Bản đồ màu đã được ẩn vì toàn bộ snapshot nằm ngoài chân trời dự báo. "
+        "Bảng bên dưới chỉ giữ giá trị last-known và gắn nhãn hết hạn."
+    )
 else:
-    st.caption("Chọn một điểm trên bản đồ để xem chi tiết tỉnh/thành đó.")
+    # Colour and radius both come from the same band lookup the legend renders, so
+    # the key and the map cannot describe different thresholds.
+    points["fill_color"] = points[metric.column].map(lambda value: list(band_colour(value, metric)))
+    points["marker_radius"] = points[metric.column].map(lambda value: marker_radius(value, metric))
+    points["band_label"] = points[metric.column].map(
+        lambda value: (
+            band_for(value, metric).label if band_for(value, metric) else "Không có dữ liệu"
+        )
+    )
+
+    # Legend is visible whenever the map is, and every band carries its numeric
+    # range as text. A reader who cannot separate the hues still gets thresholds.
+    st.caption(f"**Thang màu — {metric.label}.** {metric.legend_note}")
+    st.html(map_legend_html(metric))
+
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        id="province-anchors",
+        data=points[
+            [
+                "location_key",
+                "province_code",
+                "province_name",
+                "anchor_name",
+                "latitude",
+                "longitude",
+                "fill_color",
+                "marker_radius",
+                "metric_display",
+                "band_label",
+                "decision_label",
+                "confidence_level",
+                "coverage_tier",
+            ]
+        ],
+        get_position="[longitude, latitude]",
+        get_fill_color="fill_color",
+        get_radius="marker_radius",
+        radius_min_pixels=6,
+        radius_max_pixels=26,
+        pickable=True,
+        auto_highlight=True,
+        stroked=True,
+        get_line_color=[255, 255, 255],
+        line_width_min_pixels=1,
+    )
+
+    deck = pdk.Deck(
+        layers=[layer],
+        initial_view_state=pdk.ViewState(latitude=16.0, longitude=106.5, zoom=4.4),
+        # None so the basemap inherits the configured Streamlit theme instead of
+        # forcing a light tileset into a dark page.
+        map_style=None,
+        tooltip={
+            "html": (
+                "<b>{province_name}</b><br/>"
+                "Điểm đại diện: {anchor_name}<br/>"
+                f"{metric.label}: "
+                "{metric_display} ({band_label})<br/>"
+                "Đánh giá: {decision_label}<br/>"
+                "Tin cậy: {confidence_level} · {coverage_tier}"
+            )
+        },
+    )
+
+    selection = st.pydeck_chart(
+        deck,
+        width="stretch",
+        height=MAP_HEIGHT,
+        selection_mode="single-object",
+        on_select="rerun",
+        key="national_map",
+    )
+
+    selected_rows = []
+    if selection and getattr(selection, "selection", None):
+        selected_rows = selection.selection.get("objects", {}).get("province-anchors", [])
+
+    if selected_rows:
+        chosen = selected_rows[0]
+        match = points[points["location_key"] == chosen.get("location_key")]
+        if not match.empty:
+            row = match.iloc[0]
+            with st.container(border=True):
+                st.subheader(f"{row['province_name']} — {row['anchor_name']}")
+                metric_row(
+                    [
+                        build_metric("PM2.5 mô hình", row.get("pm25_ugm3"), unit="µg/m³"),
+                        build_metric(
+                            "Cảm giác nhiệt", row.get("apparent_temperature_c"), unit="°C"
+                        ),
+                        build_metric(
+                            "Khả năng mưa",
+                            row.get("precipitation_probability_pct"),
+                            unit="%",
+                            decimals=0,
+                        ),
+                        build_metric(
+                            "Điểm ngoài trời", row.get("outdoor_score"), unit="/100", decimals=0
+                        ),
+                    ]
+                )
+                st.write(str(row.get("decision_explanation", "")))
+                st.caption(
+                    f"Giờ dự báo: {format_local_timestamp(row.get('valid_at_local'))} · "
+                    f"Số liệu tính lúc: {format_local_timestamp(row.get('as_of_utc'))}"
+                )
+    else:
+        st.caption("Chọn một điểm trên bản đồ để xem chi tiết tỉnh/thành đó.")
 
 # The table is not a fallback, it is the accessible equivalent: everything the map
 # encodes as position and colour is here as sortable text.
@@ -228,7 +267,7 @@ if not missing.empty:
     st.caption(
         f"{len(missing)} tỉnh/thành không có giá trị {metric.label} cho giờ này: "
         + ", ".join(sorted(missing["province_name"].astype(str)))
-        + f". Các ô này hiển thị màu xám và {MISSING_DISPLAY} trong bảng."
+        + f". Các ô này hiển thị {MISSING_DISPLAY} trong bảng."
     )
 
 csv = pd.DataFrame(table).to_csv(index=False).encode("utf-8-sig")

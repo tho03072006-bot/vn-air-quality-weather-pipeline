@@ -1,21 +1,61 @@
-"""Run every Streamlit page against the active demo/serving warehouse.
+"""Run every Streamlit page against fresh and exhausted serving warehouses.
 
 Absence of an exception is not evidence a page works. A page that silently renders
-an empty state, loses its provenance badges, or drops its accessible table raises
-nothing at all, so each page declares the content that must be present and this
-script fails when it is missing.
+an empty state, loses its provenance badges, prints an operator's shell command at a
+reader, or dresses an expired snapshot as current advice raises nothing at all. Each
+page therefore declares the content that must be present and the content that must
+not, and this script drives two warehouses: the normal fixture, and a second one
+whose 72-hour forecast horizon has deliberately elapsed.
+
+The second warehouse exists because the exhausted state is unreachable otherwise.
+`build_demo_warehouse.py` used to anchor its vintage on wall-clock now, so no
+fixture could ever be built in which the horizon had already passed -- which is why
+that whole branch of the app went untested until it was found by asking what a
+public deployment would look like three days after it shipped.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from pathlib import Path
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+APP_ENTRYPOINT = PROJECT_ROOT / "dashboard" / "app.py"
+
+MISSING_VALUE_FORBIDDEN_TEXT = ("nan µg/m³", "nan °C", "None µg/m³")
+# Operator instructions on a reader-facing page. A public visitor cannot run these,
+# and a page that answers "no data" with a shell command reads as broken rather than
+# as stale. They belong on pipeline_health.py and in the README, whose audience is
+# the person who can act on them.
+OPERATIONAL_FORBIDDEN_TEXT = ("python -m vn_air_quality_weather", "dbt build")
+READER_FORBIDDEN_TEXT = (*MISSING_VALUE_FORBIDDEN_TEXT, *OPERATIONAL_FORBIDDEN_TEXT)
+
+EXHAUSTED_MESSAGE = "Chân trời dự báo đã cạn"
+EXHAUSTED_REQUIRED_TEXT = (EXHAUSTED_MESSAGE, "Vintage gần nhất:", "Tuổi dữ liệu:")
+# Every page that reads a serving mart and speaks to a reader. pipeline_health and
+# custom_location are absent on purpose: the first is an operator surface, and the
+# second fetches live from Open-Meteo rather than from the warehouse, so a stale
+# warehouse does not make its numbers stale.
+EXHAUSTED_PAGES = (
+    "today.py",
+    "national_map.py",
+    "forecast.py",
+    "alerts.py",
+    "trust.py",
+    "compare.py",
+)
+EXHAUSTED_FIXTURE_AGE_HOURS = 96
 
 # What this script cannot check, recorded so nobody assumes it does.
 #
@@ -44,7 +84,7 @@ class PageExpectation:
     # Widget labels that must exist, so a filter cannot quietly disappear.
     required_widget_labels: tuple[str, ...] = ()
     min_dataframes: int = 0
-    forbidden_text: tuple[str, ...] = field(default=("nan µg/m³", "nan °C", "None µg/m³"))
+    forbidden_text: tuple[str, ...] = field(default=MISSING_VALUE_FORBIDDEN_TEXT)
 
 
 PAGES: tuple[PageExpectation, ...] = (
@@ -69,6 +109,7 @@ PAGES: tuple[PageExpectation, ...] = (
         ),
         required_widget_labels=("Địa điểm chính",),
         min_dataframes=1,
+        forbidden_text=READER_FORBIDDEN_TEXT,
     ),
     PageExpectation(
         page="national_map.py",
@@ -84,6 +125,7 @@ PAGES: tuple[PageExpectation, ...] = (
         ),
         required_widget_labels=("Chỉ số hiển thị",),
         min_dataframes=1,
+        forbidden_text=READER_FORBIDDEN_TEXT,
     ),
     PageExpectation(
         page="forecast.py",
@@ -104,8 +146,13 @@ PAGES: tuple[PageExpectation, ...] = (
         ),
         required_widget_labels=("Khoảng dự báo", "Địa điểm chính"),
         min_dataframes=1,
+        forbidden_text=READER_FORBIDDEN_TEXT,
     ),
-    PageExpectation(page="custom_location.py", title_contains="địa điểm"),
+    PageExpectation(
+        page="custom_location.py",
+        title_contains="địa điểm",
+        forbidden_text=READER_FORBIDDEN_TEXT,
+    ),
     PageExpectation(
         page="history.py",
         title_contains="ịch sử",
@@ -114,6 +161,7 @@ PAGES: tuple[PageExpectation, ...] = (
         # would need the form driven, which belongs with the interaction work.
         required_text=("không trộn thành một chuỗi", "Áp dụng"),
         required_widget_labels=("Khoảng ngày UTC", "Chất ô nhiễm"),
+        forbidden_text=READER_FORBIDDEN_TEXT,
     ),
     PageExpectation(
         page="alerts.py",
@@ -122,6 +170,7 @@ PAGES: tuple[PageExpectation, ...] = (
         # message, and the previous copy implied that configuring two environment
         # variables would make it work.
         required_text=("chỉ mô phỏng, chưa gửi cảnh báo", "không có code gửi tin"),
+        forbidden_text=READER_FORBIDDEN_TEXT,
     ),
     PageExpectation(
         page="pipeline_health.py",
@@ -144,6 +193,7 @@ PAGES: tuple[PageExpectation, ...] = (
             "Chưa có bất kỳ đối chiếu thực nghiệm nào",
             "Quyết định 1459",
         ),
+        forbidden_text=READER_FORBIDDEN_TEXT,
     ),
     PageExpectation(
         page="compare.py",
@@ -151,6 +201,7 @@ PAGES: tuple[PageExpectation, ...] = (
         required_text=("Bảng xếp hạng", "đơn vị khác nhau"),
         required_widget_labels=("Chọn tối đa 5 tỉnh/thành", "Xếp hạng cho mục đích"),
         min_dataframes=1,
+        forbidden_text=READER_FORBIDDEN_TEXT,
     ),
 )
 
@@ -577,8 +628,158 @@ def _hour_count(app: AppTest) -> int | None:
     return None
 
 
+def _dbt_executable() -> Path | None:
+    """Locate dbt beside the active Python first, then fall back to PATH."""
+
+    executable_name = "dbt.exe" if os.name == "nt" else "dbt"
+    sibling = Path(sys.executable).with_name(executable_name)
+    if sibling.exists():
+        return sibling
+    resolved = shutil.which("dbt")
+    return Path(resolved) if resolved else None
+
+
+def _run_fixture_command(label: str, command: list[str], environment: dict[str, str]) -> list[str]:
+    """Run one isolated fixture-build step, preserving output when it fails.
+
+    stderr is captured rather than inherited so a build failure here reads as a
+    failure of this gate and not as noise from an unrelated subprocess.
+    """
+
+    completed = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode == 0:
+        return []
+
+    print(f"FAIL exhausted fixture: {label}")
+    if completed.stdout.strip():
+        print(completed.stdout.rstrip())
+    if completed.stderr.strip():
+        print(completed.stderr.rstrip(), file=sys.stderr)
+    return [f"{label} exited with code {completed.returncode}"]
+
+
+def _build_exhausted_warehouse(database: Path) -> list[str]:
+    """Build a fixture whose forecast vintage is older than its own 72-hour span."""
+
+    dbt = _dbt_executable()
+    if dbt is None:
+        return ["dbt executable was not found beside Python or on PATH"]
+
+    environment = os.environ.copy()
+    environment["DUCKDB_PATH"] = str(database.resolve())
+
+    problems = _run_fixture_command(
+        f"build demo warehouse --forecast-age-hours {EXHAUSTED_FIXTURE_AGE_HOURS}",
+        [
+            sys.executable,
+            "scripts/build_demo_warehouse.py",
+            "--database",
+            str(database),
+            "--forecast-age-hours",
+            str(EXHAUSTED_FIXTURE_AGE_HOURS),
+        ],
+        environment,
+    )
+    if problems:
+        return problems
+
+    return _run_fixture_command(
+        "dbt build",
+        [str(dbt), "build", "--project-dir", "dbt", "--profiles-dir", "dbt"],
+        environment,
+    )
+
+
+def _deck_chart_count(app: AppTest) -> int:
+    """Count PyDeck charts by their Streamlit element type.
+
+    AppTest raises rather than returning empty when a page drew none, and on the
+    exhausted fixture drawing none is the whole point, so the absence is the
+    expected state rather than an error.
+    """
+
+    try:
+        return len(app.get("deck_gl_json_chart"))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _check_exhausted_page(app: AppTest, page: str) -> list[str]:
+    """Assert one reader page treats an elapsed horizon as expired, and says so."""
+
+    problems = [f"raised {exception.value}" for exception in app.exception]
+    text = _page_text(app)
+    lowered = text.lower()
+
+    for needle in EXHAUSTED_REQUIRED_TEXT:
+        if needle.lower() not in lowered:
+            problems.append(f"missing exhausted-horizon text {needle!r}")
+    for needle in OPERATIONAL_FORBIDDEN_TEXT:
+        if needle.lower() in lowered:
+            problems.append(f"rendered forbidden operational command {needle!r}")
+
+    if page == "national_map.py":
+        # On the map, colour is the data: 34 anchors painted on the QD 1459 ramp.
+        # A STALE badge in a corner does not outvote 34 coloured dots, so the
+        # markers must be withdrawn entirely -- while the accessible table stays,
+        # because removing both would delete the evidence along with the claim.
+        chart_count = _deck_chart_count(app)
+        if chart_count:
+            problems.append(
+                f"rendered {chart_count} coloured PyDeck marker map(s) after the "
+                "forecast horizon expired"
+            )
+        if not app.dataframe:
+            problems.append(
+                "expired map dropped the accessible status table along with the markers"
+            )
+
+    return problems
+
+
+def _check_exhausted_horizon() -> list[str]:
+    """Build the aged fixture in a temp directory and drive the six reader pages."""
+
+    failures: list[str] = []
+    original_database = os.environ.get("DUCKDB_PATH")
+
+    with tempfile.TemporaryDirectory(prefix="streamlit-exhausted-") as directory:
+        database = Path(directory) / "exhausted.duckdb"
+        build_problems = _build_exhausted_warehouse(database)
+        if build_problems:
+            return [f"exhausted fixture: {problem}" for problem in build_problems]
+
+        try:
+            os.environ["DUCKDB_PATH"] = str(database.resolve())
+            app = AppTest.from_file(str(APP_ENTRYPOINT)).run(timeout=60)
+            for page in EXHAUSTED_PAGES:
+                app.switch_page(f"app_pages/{page}").run(timeout=60)
+                problems = _check_exhausted_page(app, page)
+                if problems:
+                    failures.extend(f"expired {page}: {problem}" for problem in problems)
+                    print(f"FAIL expired dashboard/{page}")
+                    for problem in problems:
+                        print(f"     {problem}")
+                else:
+                    print(f"PASS expired dashboard/{page}")
+        finally:
+            if original_database is None:
+                os.environ.pop("DUCKDB_PATH", None)
+            else:
+                os.environ["DUCKDB_PATH"] = original_database
+
+    return failures
+
+
 def main() -> None:
-    app = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    app = AppTest.from_file(str(APP_ENTRYPOINT)).run(timeout=60)
     failures: list[str] = []
     for expectation in PAGES:
         app.switch_page(f"app_pages/{expectation.page}").run(timeout=60)
@@ -600,8 +801,17 @@ def main() -> None:
     else:
         print("PASS widget interactions")
 
+    # The exhausted arm runs even when the fresh arm failed, because a fresh-arm
+    # failure and an exhausted-arm failure have different causes and reporting only
+    # the first would hide the second for a whole round trip.
+    failures.extend(_check_exhausted_horizon())
+
     if failures:
-        print(f"\n{len(failures)} problem(s) across {len(PAGES)} pages", file=sys.stderr)
+        print(
+            f"\n{len(failures)} problem(s) across {len(PAGES)} fresh pages "
+            f"and {len(EXHAUSTED_PAGES)} exhausted pages",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
 

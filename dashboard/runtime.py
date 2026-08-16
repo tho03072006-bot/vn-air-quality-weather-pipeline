@@ -20,7 +20,12 @@ from dashboard.data_access import (
     relation_exists,
 )
 from dashboard.location_search import SearchOption, filter_relevant_places
-from dashboard.view_models import COVERAGE_LABELS, POLLUTANT_LABELS, normalise_datetimes
+from dashboard.view_models import (
+    COVERAGE_LABELS,
+    POLLUTANT_LABELS,
+    format_age,
+    normalise_datetimes,
+)
 from vn_air_quality_weather.clients.geocoding import OpenMeteoGeocodingClient
 from vn_air_quality_weather.clients.open_meteo import OpenMeteoClient
 from vn_air_quality_weather.geography import nearest_province
@@ -37,6 +42,7 @@ DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "warehouse" / "vn_air_quality_we
 __all__ = [
     "COVERAGE_LABELS",
     "POLLUTANT_LABELS",
+    "forecast_horizon_exhausted_message",
     "freshness_badge",
     "source_badges",
 ]
@@ -49,20 +55,28 @@ def database_path() -> Path:
 
 
 def require_warehouse(*relations: str) -> Path:
-    """Render an actionable empty state when the warehouse is not ready."""
+    """Render a transparent empty state when the warehouse is not ready.
+
+    States the condition, not the remedy. This helper renders on every page, so any
+    shell command written here reaches a reader who cannot run it and reads the page
+    as broken. Operator instructions belong on the pipeline-health page and in the
+    README, where the audience is the person who can act on them.
+    """
 
     path = database_path()
     if not path.exists():
         st.error(
-            "Chưa có warehouse. Hãy chạy `python scripts/build_demo_warehouse.py` "
-            "và `dbt build` trước.",
+            "Chưa có warehouse dữ liệu. Các trang phân tích chưa thể hiển thị "
+            "cho tới khi dữ liệu được chuẩn bị.",
             icon=":material/database_off:",
         )
         st.stop()
     missing = [name for name in relations if not cached_relation_exists(str(path), name)]
     if missing:
         st.warning(
-            "Warehouse chưa có các mart mới: " + ", ".join(missing) + ". Hãy chạy `dbt build`.",
+            "Warehouse chưa có các bảng dữ liệu cần thiết: "
+            + ", ".join(missing)
+            + ". Trang này tạm thời chưa thể hiển thị.",
             icon=":material/build:",
         )
         st.stop()
@@ -213,6 +227,29 @@ def format_local_timestamp(value: object) -> str:
     else:
         timestamp = timestamp.tz_convert("Asia/Ho_Chi_Minh")
     return timestamp.strftime("%H:%M %d/%m/%Y")
+
+
+def forecast_horizon_exhausted_message(row: pd.Series) -> str:
+    """Explain an exhausted forecast in terms a reader can act on.
+
+    One wording for every page, because six pages each phrasing this themselves is
+    six chances to disagree about what the flag means. It states the vintage, the
+    age and the last covered hour -- all read from the row -- and it names the one
+    thing that matters to a reader: the page will not recommend anything from an
+    expired snapshot. It carries no shell command, deliberately.
+    """
+
+    issued_at = format_local_timestamp(row.get("forecast_issued_at_utc"))
+    horizon_end = format_local_timestamp(row.get("forecast_horizon_end_utc"))
+    age = format_age(row.get("forecast_age_minutes"))
+    return (
+        "**Chân trời dự báo đã cạn.** "
+        f"Vintage gần nhất: {issued_at}. "
+        f"Tuổi dữ liệu: {age}. "
+        f"Giờ dự báo cuối: {horizon_end}. "
+        "Dữ liệu last-known chỉ được giữ để giải thích trạng thái; "
+        "trang không đưa ra khuyến nghị hành động từ snapshot đã hết hạn này."
+    )
 
 
 def render_modeled_disclaimer() -> None:

@@ -1,9 +1,15 @@
 """Compare up to five province anchors."""
 
+import pandas as pd
 import streamlit as st
 
 from dashboard.components import methodology_expander
-from dashboard.runtime import cached_current, province_options, require_warehouse
+from dashboard.runtime import (
+    cached_current,
+    forecast_horizon_exhausted_message,
+    province_options,
+    require_warehouse,
+)
 from dashboard.view_models import (
     ACTIVITY_PRIORITIES,
     MISSING_DISPLAY,
@@ -52,6 +58,24 @@ current = cached_current(str(path))
 comparison = current[current["location_key"].isin(selected)].copy()
 if comparison.empty:
     st.warning("Chưa có dữ liệu hiện tại cho các tỉnh/thành đã chọn.", icon=":material/search_off:")
+    st.stop()
+
+# Built through pd.Series with an explicit default rather than indexing the column,
+# so a warehouse predating the flag degrades to "not exhausted" instead of raising a
+# KeyError and taking the page down.
+horizon_flags = pd.Series(
+    comparison.get("is_forecast_horizon_exhausted", False),
+    index=comparison.index,
+    dtype="boolean",
+).fillna(False)
+if bool(horizon_flags.any()):
+    # Any expired anchor stops the ranking. A table that silently mixes current and
+    # expired rows would rank them against each other as though they were comparable.
+    expired_row = comparison.loc[horizon_flags.astype(bool)].iloc[0]
+    st.warning(
+        forecast_horizon_exhausted_message(expired_row),
+        icon=":material/history_toggle_off:",
+    )
     st.stop()
 
 sort_columns = [column for column, _ in activity.sort_columns if column in comparison.columns]

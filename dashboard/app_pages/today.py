@@ -13,6 +13,7 @@ from dashboard.runtime import (
     cached_current,
     cached_forecast,
     cached_windows,
+    forecast_horizon_exhausted_message,
     format_local_timestamp,
     primary_location,
     require_warehouse,
@@ -33,13 +34,25 @@ current = cached_current(str(path), location_key)
 
 if current.empty:
     st.warning(
-        "Chưa có dữ liệu hiện tại cho tỉnh/thành này. Hãy chạy pipeline dự báo "
-        "(`python -m vn_air_quality_weather.forecast_pipeline --all-provinces`) rồi `dbt build`.",
+        "Warehouse chưa có điều kiện hiện tại cho tỉnh/thành này. "
+        "Vì chưa có snapshot phù hợp, trang không thể đưa ra khuyến nghị.",
         icon=":material/hourglass_empty:",
     )
     st.stop()
 
 row = current.iloc[0]
+# An exhausted horizon leaves a last-known row in place rather than an empty frame,
+# so the page must check the flag. Rendering the recommendation from it would dress
+# a four-day-old snapshot as current advice, which is the failure this page is most
+# able to cause.
+horizon_exhausted = row.get("is_forecast_horizon_exhausted", False)
+if pd.notna(horizon_exhausted) and bool(horizon_exhausted):
+    st.warning(
+        forecast_horizon_exhausted_message(row),
+        icon=":material/history_toggle_off:",
+    )
+    st.stop()
+
 source_badges(row)
 
 # Answer first. The recommendation and the one number behind it come before any

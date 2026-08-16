@@ -12,7 +12,9 @@ from dashboard.components.charts import (
     weather_panel,
 )
 from dashboard.runtime import (
+    cached_current,
     cached_forecast,
+    forecast_horizon_exhausted_message,
     format_local_timestamp,
     primary_location,
     require_warehouse,
@@ -22,8 +24,35 @@ from dashboard.view_models import build_metric
 st.title("Dự báo 24–72 giờ")
 st.caption("Xem chất lượng không khí, thời tiết và điểm phù hợp ngoài trời theo từng giờ.")
 
-path = require_warehouse("dim_province", "mart_location_hourly_forecast")
+path = require_warehouse(
+    "dim_province",
+    "mart_current_conditions",
+    "mart_location_hourly_forecast",
+)
 location_key = primary_location(path)
+
+# The exhaustion flag lives on mart_current_conditions, and it has to be read before
+# the horizon control renders. cached_forecast filters on the clock, so an exhausted
+# anchor simply returns an empty frame here -- indistinguishable from a location that
+# never had a forecast, which is precisely the ambiguity the flag exists to remove.
+current = cached_current(str(path), location_key)
+if current.empty:
+    st.warning(
+        "Warehouse chưa có snapshot hiện tại cho tỉnh/thành này. "
+        "Không thể xác định vintage và phạm vi dự báo còn hiệu lực.",
+        icon=":material/cloud_off:",
+    )
+    st.stop()
+
+current_row = current.iloc[0]
+horizon_exhausted = current_row.get("is_forecast_horizon_exhausted", False)
+if pd.notna(horizon_exhausted) and bool(horizon_exhausted):
+    st.warning(
+        forecast_horizon_exhausted_message(current_row),
+        icon=":material/history_toggle_off:",
+    )
+    st.stop()
+
 horizon = st.segmented_control(
     "Khoảng dự báo", [24, 48, 72], default=72, format_func=lambda value: f"{value} giờ"
 )
@@ -31,8 +60,8 @@ horizon = st.segmented_control(
 forecast = cached_forecast(str(path), location_key, int(horizon or 72))
 if forecast.empty:
     st.warning(
-        "Chưa có forecast trong khoảng thời gian này. Hãy chạy "
-        "`python -m vn_air_quality_weather.forecast_pipeline --all-provinces` rồi `dbt build`.",
+        "Không có giờ dự báo nào còn khả dụng trong khoảng đã chọn. "
+        "Trang không đưa ra khuyến nghị khi chuỗi dự báo trống.",
         icon=":material/cloud_off:",
     )
     st.stop()

@@ -49,7 +49,9 @@ if not path.exists():
 try:
     filter_options = options(str(path))
 except Exception:
-    st.warning("Các mart lịch sử chưa sẵn sàng. Hãy chạy pipeline và dbt build.")
+    st.warning(
+        "Các mart lịch sử chưa sẵn sàng. Trang chưa thể truy vấn chuỗi quan trắc và mô hình.",
+    )
     st.stop()
 
 with st.form("history_filters"):

@@ -23,6 +23,7 @@ from vn_air_quality_weather.models import (
 )
 
 DEMO_DAY_COUNT = 3
+DEFAULT_FORECAST_AGE_HOURS = 0
 # Anchor positions whose newest forecast batch is deliberately incomplete, so the
 # fixture reproduces the partial-refresh state that mixed-vintage tests need.
 PARTIAL_POLLUTANT_ANCHOR_INDEX = 0
@@ -61,7 +62,20 @@ def build_demo(
     database_path: Path,
     start_date: date | None = None,
     day_count: int = DEMO_DAY_COUNT,
+    forecast_age_hours: int = DEFAULT_FORECAST_AGE_HOURS,
 ) -> None:
+    """Build the offline fixture.
+
+    ``forecast_age_hours`` shifts both forecast vintages into the past without
+    changing their relative six-hour spacing. The default keeps the normal happy
+    path. A value greater than the 72-hour forecast span creates an exhausted
+    horizon, which is the only state in which the serving mart has to fall back
+    to a last-known row. Without it that fallback cannot be tested at all.
+    """
+
+    if forecast_age_hours < 0:
+        raise ValueError("forecast_age_hours must be zero or greater")
+
     start_date = start_date or default_start_date()
     now = datetime.now(UTC)
     weather: list[WeatherHourly] = []
@@ -205,7 +219,13 @@ def build_demo(
     # weather series. That reproduces a partially refreshed batch, which is the
     # only state in which a serving row can straddle two model runs. Without it
     # the vintage tests would pass no matter how the mart resolved its vintage.
-    forecast_issued_at = now.replace(minute=0, second=0, microsecond=0)
+    #
+    # Shifting the current vintage back by more than 72 hours creates a
+    # deliberately exhausted horizon. That state must leave the serving mart with
+    # one explicitly stale last-known row per location, not zero rows.
+    forecast_issued_at = (now - timedelta(hours=forecast_age_hours)).replace(
+        minute=0, second=0, microsecond=0
+    )
     previous_issued_at = forecast_issued_at - timedelta(hours=FORECAST_VINTAGE_GAP_HOURS)
 
     for issued_at in (previous_issued_at, forecast_issued_at):
@@ -362,8 +382,22 @@ def main() -> None:
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--start-date", type=date.fromisoformat, default=None)
     parser.add_argument("--days", type=int, default=DEMO_DAY_COUNT)
+    parser.add_argument(
+        "--forecast-age-hours",
+        type=int,
+        default=DEFAULT_FORECAST_AGE_HOURS,
+        help=(
+            "Shift both forecast vintages this many hours into the past. "
+            "Use a value above 72 to exercise an exhausted forecast horizon."
+        ),
+    )
     arguments = parser.parse_args()
-    build_demo(arguments.database, arguments.start_date, arguments.days)
+    build_demo(
+        arguments.database,
+        arguments.start_date,
+        arguments.days,
+        arguments.forecast_age_hours,
+    )
 
 
 if __name__ == "__main__":

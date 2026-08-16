@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 import pandas as pd
 import streamlit as st
 
-from dashboard.runtime import cached_current, choose_province, require_warehouse
+from dashboard.runtime import (
+    cached_current,
+    choose_province,
+    forecast_horizon_exhausted_message,
+    require_warehouse,
+)
 from vn_air_quality_weather.alerts import AlertRule, AlertSnapshot, evaluate_alert
 
 st.title("Cảnh báo cá nhân")
@@ -21,6 +26,17 @@ if current.empty:
     st.warning("Không có điều kiện hiện tại để đánh giá cảnh báo.")
     st.stop()
 row = current.iloc[0]
+
+# Evaluating a rule against an expired snapshot would report a firing decision that
+# corresponds to no real condition. The engine's own freshness check works on the
+# snapshot it is handed, so it cannot see that the whole horizon has elapsed.
+horizon_exhausted = row.get("is_forecast_horizon_exhausted", False)
+if pd.notna(horizon_exhausted) and bool(horizon_exhausted):
+    st.warning(
+        forecast_horizon_exhausted_message(row),
+        icon=":material/history_toggle_off:",
+    )
+    st.stop()
 
 with st.form("alert_rule"):
     metric = st.selectbox(
