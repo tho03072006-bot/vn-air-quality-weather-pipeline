@@ -2,12 +2,11 @@
 # brings in the runtime dependencies declared in pyproject.toml -- one source of
 # truth for versions rather than a second list that drifts from the first.
 #
-# This currently also installs dbt-core, dbt-duckdb, dlt and boto3, which the
-# dashboard never imports. Measured, not assumed: importing all 18 modules the
-# dashboard touches and then inspecting sys.modules shows dlt, dbt and boto3 are
-# never reached. Moving them to an `etl` extra would cut the deployment's install
-# time and footprint, and is the obvious follow-up -- deliberately not done in the
-# same change as first getting the deployment working.
+# dbt-core, dbt-duckdb, dlt and boto3 live in the optional `etl` extra. This file
+# deliberately installs no extra: a read-only dashboard runtime should not download
+# transform and ingestion engines it never imports. CI and the warehouse-refresh
+# workflow install `etl` explicitly because they run pipelines, dbt and tests that
+# import the pipeline/loader modules.
 #
 # Set the Python version to 3.11 in the Streamlit Cloud app settings.
 # pyproject declares requires-python = ">=3.11,<3.12", and a mismatch fails the

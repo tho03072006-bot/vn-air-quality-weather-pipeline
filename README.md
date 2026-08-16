@@ -72,9 +72,14 @@ See also the [serving data dictionary](docs/data-dictionary.md) and
 py -3.11 -m venv .venv
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 & ".\.venv\Scripts\Activate.ps1"
-python -m pip install --upgrade --editable ".[dev]"
+python -m pip install --upgrade --editable ".[dev,etl]"
 Copy-Item ".env.example" ".env"
 ```
+
+`etl` is required for pipeline and dbt work. Pytest also imports
+`forecast_pipeline`, `pipeline` and `duckdb_loader`, so a test environment needs
+both `dev` and `etl`; `dev` alone is intentionally insufficient. A dashboard-only
+runtime installs the project without extras.
 
 Put the OpenAQ key in `.env`. Keep `RAW_BACKEND=local` until AWS is configured.
 
@@ -137,7 +142,7 @@ running server, a browser binary, and one live API call on the custom-location
 page:
 
 ```powershell
-python -m pip install --editable ".[qa]"
+python -m pip install --editable ".[dev,etl,qa]"
 python -m playwright install chromium
 ```
 
@@ -202,6 +207,9 @@ only reads a prebuilt DuckDB warehouse. There is no dbt invocation at runtime, t
 app never writes to DuckDB, and every database connection is opened with
 `read_only=True`. The warehouse is not stored in git; it is published as the
 `vn_air_quality_weather.duckdb` asset under the `demo-warehouse` release tag.
+`requirements.txt` therefore installs the project without extras: dbt, dlt and
+boto3 belong to the `etl` extra used by CI and refresh jobs, not to the deployed
+dashboard runtime.
 
 When the expected local file is absent, `dashboard/warehouse_source.py` downloads
 the release asset once during app startup, writes it through a sibling temporary

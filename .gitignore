@@ -1,6 +1,10 @@
 # Python virtual environments
 .venv/
 venv/
+# Throwaway environments built to check what a given extra actually resolves to.
+# One of these reached 23,754 files and 532 MB, and `git add -A` will happily
+# stage every one of them.
+.tmp-*/
 
 # Python generated files
 __pycache__/

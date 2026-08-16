@@ -53,7 +53,12 @@ dashboard script that only checked for exceptions.
 ```powershell
 cd "D:\VS Code\vn-air-quality-weather-pipeline"
 & ".\.venv\Scripts\Activate.ps1"
+python -m pip install --upgrade --editable ".[dev,etl]"
 ```
+
+`etl` is required even for pytest: the suite imports `forecast_pipeline`,
+`pipeline` and `duckdb_loader`, whose import chains need boto3 and dlt. Use a base
+install with no extras only for the read-only dashboard runtime.
 
 Everything offline, in one command — no API call, no AWS call:
 
@@ -146,8 +151,10 @@ streamlit run dashboard\app.py     # from the project root, in another shell
 python scripts\verify_layout.py
 ```
 
-Install with `pip install -e ".[qa]"` then `python -m playwright install chromium`.
-The `qa` extra is kept out of `dev` so `dev` stays installable offline.
+Install with `pip install -e ".[dev,etl,qa]"` then
+`python -m playwright install chromium`. The `qa` extra is kept out of `dev` so
+`dev` stays installable offline; `etl` remains separate because transform and
+ingestion engines do not belong in the read-only dashboard runtime.
 
 **Screenshots still do not exist.** The Browser pane does not composite frames in
 this environment, so `computer{action:"screenshot"}` times out and nothing has been
