@@ -239,6 +239,35 @@ models:
               arguments:
                 values: ['MODELED_ONLY']
 
+  - name: mart_outdoor_contiguous_window
+    description: >
+      Contiguous two-hour and three-hour outdoor windows per province anchor.
+      The score is the worst member hour, and missing required data breaks a
+      window instead of being treated as a suitable hour.
+    columns:
+      - name: location_key
+        data_tests: [not_null]
+      - name: window_start_utc
+        data_tests: [not_null]
+      - name: window_end_utc
+        data_tests: [not_null]
+      - name: duration_hours
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [2, 3]
+      - name: window_score
+        data_tests: [not_null]
+      - name: decision_label
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Phù hợp hơn', 'Cân nhắc', 'Nên hạn chế']
+      - name: suitability_rank
+        data_tests: [not_null]
+
   - name: mart_city_aqi_hourly
     description: VN_AQI gio per city, UTC hour and source.
     columns:
