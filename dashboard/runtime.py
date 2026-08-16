@@ -11,6 +11,7 @@ import streamlit as st
 
 from dashboard.components import freshness_badge, methodology_expander, source_badges
 from dashboard.data_access import (
+    load_contiguous_windows,
     load_current_conditions,
     load_decision_windows,
     load_location_forecast,
@@ -118,6 +119,15 @@ def cached_forecast(path: str, location_key: str, hours: int = 72) -> pd.DataFra
 @st.cache_data(ttl="5m", max_entries=128)
 def cached_windows(path: str, location_key: str, limit: int = 5) -> pd.DataFrame:
     return normalise_datetimes(load_decision_windows(Path(path), location_key, limit))
+
+
+@st.cache_data(ttl="5m", max_entries=128)
+def cached_contiguous_windows(
+    path: str, location_key: str, limit_per_duration: int = 5
+) -> pd.DataFrame:
+    return normalise_datetimes(
+        load_contiguous_windows(Path(path), location_key, limit_per_duration)
+    )
 
 
 @st.cache_data(ttl="5m", max_entries=4)

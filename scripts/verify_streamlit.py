@@ -95,9 +95,11 @@ PAGES: tuple[PageExpectation, ...] = (
             "Mô hình CAMS",
             "Điều cần biết",
             "Số liệu tính lúc",
-            # The ranked hours must stay labelled as individual hours until a
-            # contiguous-window model exists.
-            "chưa phải một khoảng liên tục",
+            # The page must promise the two defining properties of the contiguous
+            # window instead of falling back to the old individual-hour caveat.
+            "giờ kề nhau đủ dữ liệu",
+            "giờ kém nhất",
+            "thiếu dữ liệu sẽ ngắt khoảng",
             # Asserted on the body text, not the expander title: the caveats matter
             # more than the heading that hides them.
             "không phải VN_AQI",

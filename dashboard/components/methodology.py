@@ -28,9 +28,10 @@ _LIMITATIONS = [
         "thực nghiệm với quan trắc, nên không có con số sai số nào được công bố.",
     ),
     (
-        "Khung giờ là các giờ riêng lẻ",
-        "Danh sách khung giờ phù hợp hơn là các giờ được xếp hạng độc lập, chưa phải "
-        "một khoảng liên tục.",
+        "Khung giờ liên tục dùng điểm thấp nhất",
+        "Mỗi khoảng gồm 2 hoặc 3 giờ kề nhau đủ dữ liệu. Điểm của khoảng là điểm "
+        "giờ kém nhất, và một giờ thiếu dữ liệu sẽ ngắt khoảng thay vì được xem là "
+        "điều kiện tốt.",
     ),
     (
         "Không phải tư vấn y tế",

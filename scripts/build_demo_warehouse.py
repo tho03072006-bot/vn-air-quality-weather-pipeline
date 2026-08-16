@@ -28,6 +28,16 @@ DEFAULT_FORECAST_AGE_HOURS = 0
 # fixture reproduces the partial-refresh state that mixed-vintage tests need.
 PARTIAL_POLLUTANT_ANCHOR_INDEX = 0
 STALE_WEATHER_ANCHOR_INDEX = 1
+# These two anchors make the contiguous-window contract discriminating. One has
+# a single missing weather hour, so a model that sequences the remaining rows
+# without checking timestamps will jump the gap. The other has one deliberately
+# severe PM2.5 hour between otherwise much better hours, so averaging a window
+# score can no longer look equivalent to taking its worst hour.
+CONTIGUOUS_GAP_ANCHOR_INDEX = 2
+CONTIGUOUS_GAP_LEAD_HOUR = 6
+CONTIGUOUS_WORST_HOUR_ANCHOR_INDEX = 3
+CONTIGUOUS_WORST_HOUR_LEAD_HOUR = 6
+CONTIGUOUS_WORST_HOUR_PM25 = 80.0
 FORECAST_VINTAGE_GAP_HOURS = 6
 OBSERVED_STATIONS = {
     "hanoi": ("1001", "Demo Hanoi station", {"pm25": 2001, "pm10": 2002, "o3": 2003}),
@@ -247,6 +257,12 @@ def build_demo(
                 local_hour = (valid_at.hour + 7) % 24
                 rush_hour_penalty = 12.0 if local_hour in {7, 8, 17, 18} else 0.0
                 pm25 = 10.0 + province_index % 8 + rush_hour_penalty + abs(12 - local_hour) * 0.4
+                if (
+                    is_current_vintage
+                    and province_index == CONTIGUOUS_WORST_HOUR_ANCHOR_INDEX
+                    and lead_hour == CONTIGUOUS_WORST_HOUR_LEAD_HOUR
+                ):
+                    pm25 = CONTIGUOUS_WORST_HOUR_PM25
                 rain_probability = 65.0 if local_hour in {15, 16, 17} else 15.0
                 air_quality_forecasts.append(
                     AirQualityForecastHourly(
@@ -264,7 +280,12 @@ def build_demo(
                         grid_longitude=province.longitude,
                     )
                 )
-                if drop_weather:
+                drop_contiguous_gap_hour = (
+                    is_current_vintage
+                    and province_index == CONTIGUOUS_GAP_ANCHOR_INDEX
+                    and lead_hour == CONTIGUOUS_GAP_LEAD_HOUR
+                )
+                if drop_weather or drop_contiguous_gap_hour:
                     continue
                 weather_forecasts.append(
                     WeatherForecastHourly(
@@ -345,7 +366,7 @@ def build_demo(
                 failed_location_count=0,
                 raw_objects_created=current_raw_objects - current_reused,
                 raw_objects_reused=current_reused,
-                weather_forecast_rows=(len(PROVINCES) - 1) * 72,
+                weather_forecast_rows=(len(PROVINCES) - 1) * 72 - 1,
                 air_quality_forecast_rows=len(PROVINCES) * 72 * 6 - 72,
             ),
         ]

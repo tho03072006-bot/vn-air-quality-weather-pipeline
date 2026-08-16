@@ -10,9 +10,9 @@ from dashboard.components import (
 )
 from dashboard.components.charts import pm25_timeline, render
 from dashboard.runtime import (
+    cached_contiguous_windows,
     cached_current,
     cached_forecast,
-    cached_windows,
     forecast_horizon_exhausted_message,
     format_local_timestamp,
     primary_location,
@@ -28,7 +28,11 @@ from dashboard.view_models import (
 st.title("Không khí hôm nay")
 st.caption("Một câu trả lời nhanh về điều kiện hiện tại và thời điểm phù hợp hơn để ra ngoài.")
 
-path = require_warehouse("dim_province", "mart_current_conditions", "mart_outdoor_decision_window")
+path = require_warehouse(
+    "dim_province",
+    "mart_current_conditions",
+    "mart_outdoor_contiguous_window",
+)
 location_key = primary_location(path)
 current = cached_current(str(path), location_key)
 
@@ -133,41 +137,53 @@ with st.container(border=True):
             empty_message="Không có giá trị PM2.5 nào trong 24 giờ tới.",
         )
 
-st.subheader("Các giờ phù hợp hơn trong 72 giờ tới")
-st.caption("Xếp hạng từng giờ riêng lẻ, chưa phải một khoảng liên tục.")
-windows = cached_windows(str(path), location_key)
+st.subheader("Khung giờ liên tục phù hợp hơn trong 72 giờ tới")
+st.caption(
+    "Mỗi khoảng gồm 2 hoặc 3 giờ kề nhau đủ dữ liệu. Điểm của khoảng là điểm của "
+    "giờ kém nhất; một giờ thiếu dữ liệu sẽ ngắt khoảng."
+)
+windows = cached_contiguous_windows(str(path), location_key)
 if windows.empty:
-    st.info("Chưa tìm thấy giờ nào đủ dữ liệu để xếp hạng.")
+    st.info("Chưa tìm thấy khoảng liên tục nào đủ dữ liệu để xếp hạng.")
 else:
-    view = windows[
-        [
-            "valid_at_local",
-            "outdoor_score",
-            "decision_label",
-            "pm25_ugm3",
-            "precipitation_probability_pct",
-            "apparent_temperature_c",
-            "confidence_level",
-            "decision_explanation",
+    for duration_hours in (2, 3):
+        duration_windows = windows[windows["duration_hours"] == duration_hours].copy()
+        st.markdown(f"**Khoảng {duration_hours} giờ**")
+        if duration_windows.empty:
+            st.caption(f"Chưa có khoảng {duration_hours} giờ nào đủ dữ liệu.")
+            continue
+
+        starts = pd.to_datetime(duration_windows.pop("window_start_local"))
+        ends = pd.to_datetime(duration_windows.pop("window_end_local"))
+        worst_hours = pd.to_datetime(duration_windows.pop("worst_hour_local"))
+        duration_windows.insert(
+            0,
+            "window_local",
+            starts.dt.strftime("%H:%M %d/%m") + " – " + ends.dt.strftime("%H:%M %d/%m"),
+        )
+        duration_windows["worst_hour_local"] = worst_hours.dt.strftime("%H:%M %d/%m")
+        view = duration_windows[
+            [
+                "window_local",
+                "window_score",
+                "decision_label",
+                "worst_hour_local",
+                "confidence_level",
+            ]
         ]
-    ].copy()
-    view["valid_at_local"] = pd.to_datetime(view["valid_at_local"]).dt.strftime("%H:%M %d/%m")
-    st.dataframe(
-        view,
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "valid_at_local": "Giờ địa phương",
-            "outdoor_score": st.column_config.ProgressColumn(
-                "Điểm", min_value=0, max_value=100, format="%.0f"
-            ),
-            "decision_label": "Đánh giá",
-            "pm25_ugm3": st.column_config.NumberColumn("PM2.5", format="%.1f µg/m³"),
-            "precipitation_probability_pct": st.column_config.NumberColumn("Mưa", format="%.0f%%"),
-            "apparent_temperature_c": st.column_config.NumberColumn("Cảm giác", format="%.1f °C"),
-            "confidence_level": "Tin cậy",
-            "decision_explanation": "Lý do",
-        },
-    )
+        st.dataframe(
+            view,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "window_local": "Khung giờ địa phương",
+                "window_score": st.column_config.ProgressColumn(
+                    "Điểm thấp nhất", min_value=0, max_value=100, format="%.0f"
+                ),
+                "decision_label": "Đánh giá",
+                "worst_hour_local": "Giờ kém nhất",
+                "confidence_level": "Tin cậy",
+            },
+        )
 
 methodology_expander()

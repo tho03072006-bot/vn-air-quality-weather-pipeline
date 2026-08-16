@@ -89,6 +89,24 @@ def load_decision_windows(
         return connection.execute(query, [location_key, limit]).fetchdf()
 
 
+def load_contiguous_windows(
+    database_path: Path,
+    location_key: str,
+    limit_per_duration: int = 5,
+) -> pd.DataFrame:
+    """Return the strongest contiguous two-hour and three-hour windows."""
+
+    query = """
+        select *
+        from analytics.mart_outdoor_contiguous_window
+        where location_key = ?
+          and suitability_rank <= ?
+        order by duration_hours, suitability_rank
+    """
+    with duckdb.connect(str(database_path), read_only=True) as connection:
+        return connection.execute(query, [location_key, limit_per_duration]).fetchdf()
+
+
 def load_pipeline_health(database_path: Path) -> pd.DataFrame:
     """Summarize row volume and freshness for each raw source table."""
 
