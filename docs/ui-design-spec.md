@@ -158,13 +158,12 @@ Requirements for the redesign:
   separately per finding A's fix — never one `max()`-derived timestamp.
 - The word "confidence", never "accuracy", until a verification fact exists.
 
-### G7 — Best windows are individual hours (Phase 3, depends on data fix)
+### G7 — Best windows are individual hours (closed in Phase 6)
 
-`today.py:62-95` lists ranked individual hours from
-`mart_outdoor_decision_window`. A user reads "khung giờ" as a contiguous block.
-Until the mart produces contiguous 2h/3h windows, the UI must say it is ranking
-single hours. Renaming the section is the honest interim fix; the real fix is a
-contiguous-window model.
+`mart_outdoor_contiguous_window` now publishes adjacent 2-hour and 3-hour
+intervals. The Today page ranks those intervals separately, uses the worst member
+hour as the interval score, and states that a missing required hour breaks the
+window. The earlier individual-hour caveat has therefore been removed.
 
 ### G8 — Alerts must state preview-only (Phase 4)
 

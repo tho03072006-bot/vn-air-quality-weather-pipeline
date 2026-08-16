@@ -81,6 +81,9 @@ plus UTC hour, never an unqualified timestamp alone.
 - `mart_location_hourly_forecast`: latest vintage with modeled pollutants, weather and decision score.
 - `mart_current_conditions`: nearest available valid hour per province anchor.
 - `mart_outdoor_decision_window`: top five explainable hours per location in the next 72 hours.
+- `mart_outdoor_contiguous_window`: one contiguous 2h or 3h candidate per
+  location/start/duration in the next 72 hours; its score is the worst member
+  hour and missing required data breaks the candidate.
 - `fct_pipeline_run`: one run_id per UTC data date.
 
 ## VN_AQI

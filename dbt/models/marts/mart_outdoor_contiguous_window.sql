@@ -9,9 +9,9 @@
 -- outside experiences both hours. Reusing the existing 70/45 decision-label
 -- cut points therefore means every member hour reaches the window's label.
 --
--- An hour with missing PM2.5 or temperature is removed before sequencing. The
--- explicit +1h/+2h predicates below then break the window at that gap: missing
--- data is not a good condition and cannot be jumped over as if it were present.
+-- An hour missing any input used by outdoor_score is removed before sequencing.
+-- The explicit +1h/+2h predicates below then break the window at that gap:
+-- missing data is not a good condition and cannot be jumped over as if present.
 --
 -- Materialized as a view because the 72-hour horizon is anchored on
 -- current_timestamp and must keep moving between dbt builds.
@@ -29,6 +29,9 @@ eligible_hours as (
       and forecast.valid_at_utc < date_trunc('hour', as_of.as_of_utc) + interval '72 hours'
       and forecast.pm25_ugm3 is not null
       and forecast.temperature_2m_c is not null
+      and forecast.apparent_temperature_c is not null
+      and forecast.precipitation_probability_pct is not null
+      and forecast.uv_index is not null
 ),
 
 sequenced as (

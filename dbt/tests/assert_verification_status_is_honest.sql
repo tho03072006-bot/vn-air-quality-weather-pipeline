@@ -21,8 +21,8 @@ with verification as (
         valid_at_utc,
         as_of_utc,
         observed_concentration,
-        error_ugm3,
-        abs_error_ugm3,
+        discrepancy_ugm3,
+        abs_discrepancy_ugm3,
         verification_status
     from {{ ref('fct_forecast_verification') }}
 ),
@@ -34,17 +34,17 @@ observable_series as (
 ),
 
 violations as (
-    select 'VERIFIED without observation or error' as violation, count(*) as rows
+    select 'VERIFIED without observation or discrepancy' as violation, count(*) as rows
     from verification
     where verification_status = 'VERIFIED'
-      and (observed_concentration is null or error_ugm3 is null or abs_error_ugm3 is null)
+      and (observed_concentration is null or discrepancy_ugm3 is null or abs_discrepancy_ugm3 is null)
 
     union all
 
-    select 'unobserved status carrying an error', count(*)
+    select 'unobserved status carrying a discrepancy', count(*)
     from verification
     where verification_status in ('PENDING', 'UNVERIFIABLE')
-      and (observed_concentration is not null or error_ugm3 is not null)
+      and (observed_concentration is not null or discrepancy_ugm3 is not null)
 
     union all
 

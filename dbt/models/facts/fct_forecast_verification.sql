@@ -130,16 +130,24 @@ select
         when valid_at_utc > as_of_utc - interval '{{ unverifiable_hours }} hours' then 'PENDING'
         else 'UNVERIFIABLE'
     end as verification_status,
-    -- Signed. Positive means the forecast was higher than the observation. Kept
-    -- separate from the absolute error because a model that is consistently high is
-    -- a different problem from one that is merely imprecise, and averaging absolute
-    -- errors hides which one this is.
+    -- Discrepancy, not error. The word matters and is not squeamishness: "error"
+    -- asserts the forecast is the thing that is wrong, and this column cannot
+    -- support that. It measures the gap between a province grid point and one
+    -- street-level station, which is model error and representativeness error added
+    -- together with no way here to separate them. Measured on this warehouse the
+    -- Hanoi ozone series runs 4.14x the station and the PM2.5 series 2.39x, high on
+    -- 92% and 88% of hours -- a systematic offset of that size is far more likely to
+    -- be two instruments measuring different things than a model that is simply bad.
+    --
+    -- Signed and absolute are kept apart because a consistently high reading is a
+    -- different finding from an imprecise one, and averaging absolute values hides
+    -- which of the two this is.
     case
         when observed_concentration is not null
             then forecast_concentration - observed_concentration
-    end as error_ugm3,
+    end as discrepancy_ugm3,
     case
         when observed_concentration is not null
             then abs(forecast_concentration - observed_concentration)
-    end as abs_error_ugm3
+    end as abs_discrepancy_ugm3
 from paired

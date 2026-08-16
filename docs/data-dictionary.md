@@ -25,6 +25,10 @@
   each province anchor.
 - `analytics.mart_outdoor_decision_window`: five strongest complete hours in the
   next 72 hours for each anchor.
+- `analytics.mart_outdoor_contiguous_window`: contiguous 2-hour and 3-hour
+  candidates in the next 72 hours. Each row exposes its member timestamps and
+  scores; `window_score` is the lowest member score, and a missing required hour
+  breaks the interval.
 
 `outdoor_score` is not VN_AQI and is not medical advice. `MODELED_ONLY` means no
 suitable observation was used for that row.
