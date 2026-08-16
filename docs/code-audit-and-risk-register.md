@@ -861,6 +861,63 @@ available precisely when decision surfaces must stop.
 
 ---
 
+## O. A flat 4.7× model–station gap is not forecast error — P2, measured limitation
+
+This is a data finding, not a code defect. Joining forecasts to observations at the
+same valid hour produced 2,052 VERIFIED pairs and 1,404 PENDING rows across 4 series,
+12 vintages and about 8 days. Both sides are in µg/m³, so the gap is not a unit
+conversion error.
+
+| Series | Model/station ratio by 1–24h / 25–48h / 49–72h lead band | Mean \|gap\| by the same bands (µg/m³) |
+|---|---|---|
+| hanoi o3 | 4.67 / 4.75 / 4.77 | 106.5 / 77.7 / 102.6 |
+| hanoi pm10 | 1.09 / 1.03 / 1.01 | 18.7 / 30.4 / 40.9 |
+| hanoi pm25 | 2.13 / 2.01 / 1.76 | 40.1 / 49.9 / 54.4 |
+| hcm pm25 | 1.40 / 0.95 / 0.70 | 7.9 / 5.8 / 10.2 |
+
+The model value is higher than the station observation in 91.7% of hanoi o3
+hours, 87.8% of hanoi pm25 hours, 66.3% of hanoi pm10 hours and 68.2% of hcm
+pm25 hours. Coverage is just as important as the magnitude: only 2 cities have a
+station; the other 32 province-level units, including Da Nang, have 0 observations.
+
+**The shape across lead time is the central evidence.** Real forecast skill should
+degrade as the forecast reaches farther into the future. The hanoi o3 ratio does
+not: 4.67, 4.75 and 4.77 are the same approximately 4.7× separation in all three
+lead bands. A multiplicative gap that stays flat with lead time cannot be explained
+as lead-time forecast error. It is a systematic difference between two measurements:
+the CAMS value at the province anchor and the observation at the station do not
+measure the same object. That does **not** show that CAMS is wrong.
+
+**The control is in the same table.** Hanoi pm10 has a model/station ratio near
+1.0 — the model captures the average level — while its mean absolute gap rises
+steadily from 18.7 to 30.4 to 40.9 µg/m³. That is timing error which worsens with
+lead time in the expected direction: the shape of genuine forecast error. Seeing
+that shape beside the flat o3 ratio in the same warehouse is what makes the
+diagnosis credible; this is not a general inference from one large number.
+
+Limitations 1 and 2 below — one anchor does not represent an entire province, and
+the representative point is not a monitoring station — were previously qualitative
+warnings. Finding O quantifies them for the first time: in Hanoi o3, the distance
+between those two measurement contexts is approximately 4.7 times.
+
+**The product consequence is naming and disclosure, not correction.** The serving
+relation is named `mart_model_station_discrepancy`, not an accuracy mart. The Trust
+page publishes the measured gap and says explicitly that the current data cannot
+separate forecast error from anchor-versus-station representativeness;
+`verify_streamlit.py` guards that commitment. The older Trust statement that there
+had been no empirical comparison became false as soon as the verification fact was
+built, while its gate could still pass on the obsolete claim.
+
+One quantitative separation remains open: compare the model with itself at the
+station's exact coordinates instead of comparing the province anchor with the
+station. That has not been built; there is no more detailed plan recorded here.
+
+**The rule this leaves behind.** A new measurement can make an old statement false,
+and a gate that still passes the false statement is as bad as a gate that cannot
+fail.
+
+---
+
 ## Data-product limitations to disclose, not silently fix — P2
 
 These are honest modelling limits. They must be visible in the UI and in
