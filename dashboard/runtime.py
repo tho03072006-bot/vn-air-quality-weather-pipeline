@@ -26,6 +26,7 @@ from dashboard.view_models import (
     format_age,
     normalise_datetimes,
 )
+from dashboard.warehouse_source import ensure_local_warehouse
 from vn_air_quality_weather.clients.geocoding import OpenMeteoGeocodingClient
 from vn_air_quality_weather.clients.open_meteo import OpenMeteoClient
 from vn_air_quality_weather.geography import nearest_province
@@ -49,9 +50,15 @@ __all__ = [
 
 
 def database_path() -> Path:
-    """Resolve the active DuckDB path once for every page."""
+    """Resolve the active DuckDB path once for every page.
 
-    return Path(os.environ.get("DUCKDB_PATH", DEFAULT_DATABASE_PATH))
+    On a deployment the warehouse is not in git; it arrives as a published release
+    asset. `ensure_local_warehouse` fetches it on the first call and is a no-op
+    everywhere else, so local development and the test suite see no change at all.
+    """
+
+    configured = Path(os.environ.get("DUCKDB_PATH", DEFAULT_DATABASE_PATH))
+    return ensure_local_warehouse(configured)
 
 
 def require_warehouse(*relations: str) -> Path:

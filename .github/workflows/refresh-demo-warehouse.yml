@@ -1,0 +1,106 @@
+# Refresh the published warehouse the public dashboard reads.
+#
+# The deployed app is read-only: it downloads this asset and opens it with
+# read_only=True. Nothing rebuilds a warehouse at request time, and dbt is not a
+# runtime dependency of the dashboard. All of that work happens here instead.
+#
+# The forecast pipeline needs no API key, so this workflow needs no secret. The
+# historical pipeline does need one, and is deliberately not run: observed history
+# stays frozen at whatever the seeded asset carried, and the History page already
+# reports its own coverage honestly. Adding OPENAQ_API_KEY as a repository secret
+# and a second pipeline step is the upgrade path, not a prerequisite.
+#
+# Order matters and is not interchangeable:
+#   prune BEFORE dbt  -- otherwise the analytics layer is still built from every
+#                        vintage and stays large no matter what raw looks like
+#   compact AFTER dbt -- DuckDB reuses freed pages rather than returning them, so
+#                        rebuilding analytics re-inflates the file (measured
+#                        13.8 MB -> 19.8 MB -> 11.5 MB across the three steps)
+#
+# The filename is load-bearing throughout. DuckDB names a catalog after the file
+# stem and bakes it into stored view definitions, and two marts are views, so the
+# asset must stay `vn_air_quality_weather.duckdb` from here to the reader.
+
+name: Refresh demo warehouse
+
+on:
+  schedule:
+    # Every six hours, matching the local Airflow forecast DAG cadence.
+    - cron: "20 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # A warehouse is a single-writer artefact. Two overlapping runs would each start
+  # from the same asset and the slower one would silently discard the other's work.
+  group: demo-warehouse
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      WAREHOUSE: warehouse/vn_air_quality_weather.duckdb
+      RELEASE_TAG: demo-warehouse
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project
+        run: pip install -e .
+
+      - name: Download the published warehouse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p warehouse
+          gh release download "$RELEASE_TAG" \
+            --pattern vn_air_quality_weather.duckdb \
+            --dir warehouse
+          ls -lh "$WAREHOUSE"
+
+      - name: Add a forecast vintage
+        env:
+          DUCKDB_PATH: ${{ github.workspace }}/warehouse/vn_air_quality_weather.duckdb
+        run: python -m vn_air_quality_weather.forecast_pipeline --all-provinces
+
+      - name: Prune old vintages
+        run: |
+          python scripts/build_deploy_warehouse.py \
+            --source "$WAREHOUSE" \
+            --output-dir pruned
+
+      - name: Rebuild the analytics layer
+        env:
+          DUCKDB_PATH: ${{ github.workspace }}/pruned/vn_air_quality_weather.duckdb
+        run: dbt build --project-dir dbt --profiles-dir dbt
+
+      - name: Compact
+        run: |
+          python scripts/build_deploy_warehouse.py \
+            --source pruned/vn_air_quality_weather.duckdb \
+            --output-dir upload \
+            --compact-only
+
+      # The gate that matters. Uploading an asset nobody rendered is how a broken
+      # deployment ships quietly: a catalog-name mistake in the compaction step
+      # leaves every mart unreadable while the file itself looks perfectly healthy.
+      - name: Verify the asset renders every page
+        env:
+          DUCKDB_PATH: ${{ github.workspace }}/upload/vn_air_quality_weather.duckdb
+        run: python scripts/verify_streamlit.py
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh upload/vn_air_quality_weather.duckdb
+          gh release upload "$RELEASE_TAG" \
+            upload/vn_air_quality_weather.duckdb --clobber
