@@ -1,9 +1,18 @@
 # Vietnam Air Quality & Weather Decision Platform
 
-An end-to-end local decision platform for Vietnam. It preserves observed
-OpenAQ data separately from modeled Open-Meteo/CAMS data, precomputes versioned
-72-hour forecasts for all 34 province-level units effective from 1 July 2025,
-builds tested DuckDB/dbt marts, and serves a Vietnamese Streamlit dashboard.
+An end-to-end decision platform for Vietnam, with both a local development path
+and a read-only public deployment target on Streamlit Community Cloud. It
+preserves observed OpenAQ data separately from modeled Open-Meteo/CAMS data,
+precomputes versioned 72-hour forecasts for all 34 province-level units effective
+from 1 July 2025, builds tested DuckDB/dbt marts, and serves a Vietnamese
+Streamlit dashboard. The deployment warehouse is a release asset, not a file
+committed to git.
+
+**Live:** <https://vn-air-quality-weather.streamlit.app/>
+
+Verified against the deployed app rather than assumed: all 34 anchors carry a
+forecast with none missing, no anchor is serving mismatched air and weather
+vintages, and no page renders an operator shell command at a reader.
 
 **Start here if you are picking this up:** [docs/handover.md](docs/handover.md)
 records the verified state, what is deliberately not verified, and where to
@@ -185,6 +194,111 @@ Pages: **Hôm nay**, **Dự báo 24–72 giờ**, **Địa điểm tùy chọn**
 anchors; the custom page supports Vietnam place search and validated WGS84
 coordinates. Every modeled view shows source, coverage and confidence labels
 and avoids presenting the planning heuristic as official VN_AQI.
+
+## Deployment
+
+The Streamlit Community Cloud deployment target is deliberately simple: the app
+only reads a prebuilt DuckDB warehouse. There is no dbt invocation at runtime, the
+app never writes to DuckDB, and every database connection is opened with
+`read_only=True`. The warehouse is not stored in git; it is published as the
+`vn_air_quality_weather.duckdb` asset under the `demo-warehouse` release tag.
+
+When the expected local file is absent, `dashboard/warehouse_source.py` downloads
+the release asset once during app startup, writes it through a sibling temporary
+file, and atomically moves it into place only after the download completes. When a
+local warehouse already exists, or no deploy URL is configured, the module does
+nothing and emits no local-development noise.
+
+### Refresh architecture
+
+`.github/workflows/refresh-demo-warehouse.yml` runs every six hours and performs
+the write side away from the Streamlit runtime:
+
+```text
+download release asset
+    -> add one real forecast vintage
+    -> prune old forecast vintages
+    -> dbt build
+    -> compact into the upload file
+    -> verify_streamlit.py against that exact file
+    -> replace the release asset
+```
+
+The workflow intentionally runs only the forecast pipeline, which needs no API
+key, so the workflow needs no repository secret.
+
+The prune, dbt and final compaction steps cannot be reordered:
+
+| Stage | Measured file size | Why it is in this position |
+|---|---:|---|
+| Input asset | 28.8 MB | Contains the accumulated forecast vintages before deployment pruning. |
+| Prune old vintages | 13.8 MB | Must run before dbt; otherwise analytics are still built from all 12 vintages. Raw air-quality forecast rows fall from 176,256 to 14,688, raw weather forecast rows from 29,376 to 2,448, and distinct vintages from 12 to 1. |
+| dbt build | 19.8 MB | Rebuilds analytics from the pruned raw layer, but DuckDB reuses freed pages instead of returning them to the file, so the file grows again. |
+| Final compaction | 11.5 MB | Must run after dbt to reclaim the pages left behind by the analytics rebuild. Compacting only before dbt would publish the re-inflated file. |
+
+### The filename is an invariant
+
+The asset must remain named `vn_air_quality_weather.duckdb` from the source
+warehouse through CI to the file downloaded by Streamlit. DuckDB derives a catalog
+name from the file stem and bakes that catalog qualifier into stored view
+definitions. `mart_current_conditions` and `mart_outdoor_decision_window` are
+views, so renaming the asset makes every page that reads those marts fail with
+`Catalog "..." does not exist`.
+
+For that reason, `scripts/build_deploy_warehouse.py` accepts `--output-dir`, not a
+caller-selected output filename. It always preserves the source filename and
+verifies that both views can be read after every write.
+
+### Data provenance in the deployment target
+
+The deployment target has three distinct data paths. They must not be described as
+one uniformly fresh source:
+
+- **Province forecasts:** real Open-Meteo/CAMS forecast data, refreshed every six
+  hours by CI.
+- **Observed history:** real OpenAQ observations, but frozen at the warehouse seed
+  date. CI does not run the historical pipeline because that pipeline requires an
+  API key, so this part of the asset will become progressively older.
+- **Custom location:** the **Địa điểm tùy chọn** page calls Open-Meteo directly at
+  runtime and therefore returns fresh modeled data independently of the release
+  warehouse.
+
+### Deployment configuration
+
+Community Cloud reads these names through Streamlit secrets; local shells may set
+the same names as environment variables.
+
+| Variable | Required where | Purpose |
+|---|---|---|
+| `DEMO_WAREHOUSE_URL` | Required for deployment | Direct download URL for the `demo-warehouse` release asset. |
+| `DEMO_WAREHOUSE_TOKEN` | Only when the repository is private | Bearer token used to download the private repository's release asset. It is unnecessary when the asset is public. |
+| `DUCKDB_PATH` | Local development | Overrides the local DuckDB path. When the file already exists, no release download occurs. |
+
+In Streamlit Community Cloud settings, select **Python 3.11**. The project pins
+`requires-python = ">=3.11,<3.12"` in `pyproject.toml`; choosing another Python
+version can fail dependency installation with an error that does not mention
+Python at all.
+
+### Measured deployment gate
+
+The release path was verified with the file that would be uploaded, not a different
+local warehouse:
+
+| Gate | Result |
+|---|---|
+| Ruff | clean |
+| pytest | 313 passed, 1 skipped |
+| dbt build | PASS=130, ERROR=0 |
+| Streamlit | 16/16 |
+| `verify.ps1` | exit 0 |
+
+### Deliberately not production-ready
+
+This is a public-demo deployment shape, not a production security baseline.
+Security, backup and observability have not been completed. The Alerts page is a
+preview only: it sends nothing and persists no alert history. No accuracy number is
+published because no forecast-verification fact exists; the product reports
+confidence without relabelling it as accuracy.
 
 ## VN_AQI
 
