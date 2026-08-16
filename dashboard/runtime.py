@@ -15,6 +15,7 @@ from dashboard.data_access import (
     load_current_conditions,
     load_decision_windows,
     load_location_forecast,
+    load_model_station_discrepancy,
     load_pipeline_health,
     load_pipeline_runs,
     load_provinces,
@@ -138,6 +139,11 @@ def cached_pipeline_health(path: str) -> pd.DataFrame:
 @st.cache_data(ttl="5m", max_entries=4)
 def cached_pipeline_runs(path: str) -> pd.DataFrame:
     return load_pipeline_runs(Path(path))
+
+
+@st.cache_data(ttl="15m", max_entries=4)
+def cached_model_station_discrepancy(path: str) -> pd.DataFrame:
+    return load_model_station_discrepancy(Path(path))
 
 
 @st.cache_data(ttl="1h", max_entries=64, show_spinner=False)

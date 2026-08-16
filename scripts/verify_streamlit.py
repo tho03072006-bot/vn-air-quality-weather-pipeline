@@ -191,8 +191,20 @@ PAGES: tuple[PageExpectation, ...] = (
             "không phải trạm quan trắc",
             "thời điểm hệ thống lấy dữ liệu",
             "không phải VN_AQI",
-            # No accuracy figure may be published until a verification fact exists.
-            "Chưa có bất kỳ đối chiếu thực nghiệm nào",
+            # The guarantee, restated once a verification fact finally existed.
+            # It used to read "no empirical comparison exists"; that sentence became
+            # false the moment fct_forecast_verification was built, and a guarantee
+            # that has quietly gone false is worse than none. What must survive is
+            # not the old wording but the promise underneath it: the product may
+            # publish how far the model sits from a station, and may never present
+            # that gap as forecast accuracy.
+            "không công bố con số độ chính xác dự báo nào",
+            "chưa tách được hai phần đó",
+            # The discrepancy table itself, named honestly, with the caveat that
+            # bounds it. Thirty-two provinces have no station, and the page must
+            # never let their absence read as a good result.
+            "Chênh lệch giữa mô hình và trạm quan trắc",
+            "không phải là chính xác hơn, mà là chưa từng được đo",
             "Quyết định 1459",
         ),
         forbidden_text=READER_FORBIDDEN_TEXT,

@@ -12,7 +12,9 @@ import streamlit as st
 from dashboard.components import methodology_expander, metric_row
 from dashboard.runtime import (
     cached_current,
+    cached_model_station_discrepancy,
     cached_pipeline_runs,
+    cached_relation_exists,
     forecast_horizon_exhausted_message,
     require_warehouse,
 )
@@ -130,14 +132,86 @@ with st.container(border=True):
     st.write(
         "Mức tin cậy hiện suy ra từ ba thứ: lead time, việc các trường bắt buộc có đủ "
         "hay không, và việc air/weather có cùng một lần chạy mô hình hay không. "
-        "**Chưa có bất kỳ đối chiếu thực nghiệm nào với quan trắc**, nên sản phẩm không "
-        "công bố con số sai số nào — không MAE, không RMSE, không bias."
+        "**Sản phẩm không công bố con số độ chính xác dự báo nào** — không MAE, không "
+        "RMSE, không bias, dù bảng bên dưới đã đo được khoảng cách giữa mô hình và trạm."
     )
     st.caption(
-        "Để nói được 'độ chính xác' cần một bảng verification ghép mỗi vintage với quan "
-        "trắc đã xác nhận nó, rồi tính sai số theo địa điểm, chất và lead hour. Việc đó "
-        "chưa được xây."
+        "Lý do khoảng cách đó chưa phải độ chính xác: một bên là ô lưới mô hình đại diện "
+        "cả tỉnh, bên kia là một trạm đo ở một con phố. Khoảng cách giữa chúng gồm cả sai "
+        "số mô hình lẫn sai lệch do hai thứ đo không cùng một đối tượng, và bảng này chưa "
+        "tách được hai phần đó."
     )
+
+# Published rather than withheld, and named for what it is. A gap this large is
+# exactly what a reader deciding whether to trust a number needs to see, and hiding
+# it while the rest of the page preaches transparency would be the worse failure.
+#
+# Existence is checked before loading, not assumed. The published warehouse asset is
+# rebuilt on its own schedule, so a deployment can be running against a file built
+# before this mart existed -- and this page in particular has to survive a warehouse
+# that is missing something, since it is one of the pages a reader opens precisely
+# when the data looks wrong.
+if cached_relation_exists(str(path), "mart_model_station_discrepancy"):
+    discrepancy = cached_model_station_discrepancy(str(path))
+else:
+    discrepancy = pd.DataFrame()
+
+if not discrepancy.empty:
+    with st.container(border=True):
+        st.subheader("Chênh lệch giữa mô hình và trạm quan trắc")
+        st.write(
+            "Mỗi dòng ghép các giờ dự báo với quan trắc đã đo chính giờ đó. "
+            "**Chỉ Hà Nội và TP.HCM có trạm**, nên bảng này không nói gì về 32 tỉnh/thành "
+            "còn lại — những nơi đó không phải là chính xác hơn, mà là chưa từng được đo."
+        )
+        view = discrepancy.copy()
+        view["Tỉ lệ mô hình/trạm"] = (
+            view["mean_forecast_ugm3"] / view["mean_observed_ugm3"]
+        ).round(2)
+        st.dataframe(
+            view[
+                [
+                    "location_key",
+                    "pollutant",
+                    "lead_band",
+                    "paired_hours",
+                    "mean_forecast_ugm3",
+                    "mean_observed_ugm3",
+                    "Tỉ lệ mô hình/trạm",
+                    "mean_abs_discrepancy_ugm3",
+                    "mean_signed_discrepancy_ugm3",
+                ]
+            ],
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "location_key": "Địa điểm",
+                "pollutant": "Chất",
+                "lead_band": "Lead time",
+                "paired_hours": st.column_config.NumberColumn("Số giờ ghép được"),
+                "mean_forecast_ugm3": st.column_config.NumberColumn("Mô hình TB", format="%.1f"),
+                "mean_observed_ugm3": st.column_config.NumberColumn("Trạm TB", format="%.1f"),
+                "mean_abs_discrepancy_ugm3": st.column_config.NumberColumn(
+                    "Chênh lệch tuyệt đối TB", format="%.1f"
+                ),
+                "mean_signed_discrepancy_ugm3": st.column_config.NumberColumn(
+                    "Lệch có dấu TB", format="%.1f"
+                ),
+            },
+        )
+        # The diagnostic that the two-column layout makes visible, and the reason the
+        # table is worth a reader's attention rather than being a wall of numbers.
+        st.caption(
+            "Cách đọc bảng: **tỉ lệ giữ nguyên qua cả ba mức lead time** là dấu hiệu của "
+            "lệch hệ thống, không phải sai số dự báo — vì kỹ năng dự báo thật thì phải "
+            "kém đi khi dự xa hơn. Ngược lại, tỉ lệ quanh 1.0 mà chênh lệch tuyệt đối "
+            "tăng dần theo lead time là sai số thời điểm, tức sai số dự báo thật."
+        )
+        st.caption(
+            "Chỉ hiện con số khi có tối thiểu "
+            f"{int(discrepancy['min_paired_hours'].max())} giờ ghép được; dưới ngưỡng đó "
+            "ô sẽ trống thay vì hiện một con số dựng từ vài giờ lẻ."
+        )
 
 with st.container(border=True):
     st.subheader("Bằng chứng pipeline đã chạy")

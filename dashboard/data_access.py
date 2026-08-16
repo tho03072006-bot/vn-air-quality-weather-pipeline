@@ -334,3 +334,35 @@ def load_coverage(
     parameters = [start_date, end_date, *cities, pollutant, source_type]
     with duckdb.connect(str(database_path), read_only=True) as connection:
         return connection.execute(query, parameters).fetchdf()
+
+
+def load_model_station_discrepancy(database_path: Path) -> pd.DataFrame:
+    """Return the model-versus-station gap by location, pollutant and lead band.
+
+    Deliberately not named accuracy, here or anywhere downstream. The mart measures
+    a CAMS grid cell against one street-level station, which is model error and
+    representativeness error added together.
+    """
+
+    query = """
+        select
+            location_key,
+            pollutant,
+            lead_band,
+            unit,
+            paired_hours,
+            pending_hours,
+            unverifiable_hours,
+            vintages,
+            has_sufficient_sample,
+            min_paired_hours,
+            mean_forecast_ugm3,
+            mean_observed_ugm3,
+            mean_abs_discrepancy_ugm3,
+            rms_discrepancy_ugm3,
+            mean_signed_discrepancy_ugm3
+        from analytics.mart_model_station_discrepancy
+        order by location_key, pollutant, lead_band
+    """
+    with duckdb.connect(str(database_path), read_only=True) as connection:
+        return connection.execute(query).fetchdf()
