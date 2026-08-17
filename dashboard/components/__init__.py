@@ -8,11 +8,12 @@ therefore unit tested directly.
 
 from dashboard.components.methodology import methodology_expander
 from dashboard.components.metric_cards import metric_row
-from dashboard.components.provenance import freshness_badge, source_badges
+from dashboard.components.provenance import freshness_badge, source_badges, source_registry
 
 __all__ = [
     "freshness_badge",
     "methodology_expander",
     "metric_row",
     "source_badges",
+    "source_registry",
 ]

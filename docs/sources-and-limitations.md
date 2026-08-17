@@ -1,5 +1,12 @@
 # Sources, attribution and limitations
 
+The machine-readable copy of this list is
+`src/vn_air_quality_weather/sources.py`, and the Trust page renders it rather than
+restating it. Every entry is registered `UNVERIFIED`: licence, attribution and
+redistribution terms have not been confirmed by a person, and the deployed app says
+so. This document is the prose around that registry, not a second copy of it — when
+they disagree, the registry is what the product actually shows.
+
 ## Administrative geography
 
 The 34 province-level codes and names in `provinces_2025.csv` follow the

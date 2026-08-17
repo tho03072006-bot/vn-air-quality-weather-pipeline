@@ -208,6 +208,12 @@ PAGES: tuple[PageExpectation, ...] = (
             # This shared-methodology promise is asserted on Trust as well as Today;
             # either page dropping the expander must make the gate visibly fail.
             "Đối chiếu mô hình–trạm đã có và được công bố",
+            # The source registry, rendered from vn_air_quality_weather.sources rather
+            # than restated. The display name proves the registry reached the page;
+            # the licence sentence is the disclosure a public deployment owes a reader
+            # and the reason the registry stopped being dead code.
+            "OpenAQ API v3",
+            "chưa được con người xác nhận",
             # The guarantee, restated once a verification fact finally existed.
             # It used to read "no empirical comparison exists"; that sentence became
             # false the moment fct_forecast_verification was built, and a guarantee

@@ -9,7 +9,7 @@ figures instead of describing them in prose that can drift out of date.
 import pandas as pd
 import streamlit as st
 
-from dashboard.components import methodology_expander, metric_row
+from dashboard.components import methodology_expander, metric_row, source_registry
 from dashboard.runtime import (
     cached_current,
     cached_model_station_discrepancy,
@@ -101,6 +101,9 @@ with st.container(border=True):
         "không bị xóa mà giữ trong `mart_flagged_measurement_quarantine`, vì một chính "
         "sách loại trừ không xem lại được thì không phân biệt được với mất dữ liệu."
     )
+
+    st.markdown("**Nguồn dữ liệu và tình trạng giấy phép**")
+    source_registry()
 
 with st.container(border=True):
     st.subheader("Những gì con số này không nói")
