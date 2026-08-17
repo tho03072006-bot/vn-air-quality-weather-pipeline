@@ -1,0 +1,65 @@
+# Watch the deployment, because nothing else does.
+#
+# Every other gate in this repository proves something about the code. None of them
+# proves the public app is serving it. On 2026-08-16 those two states came apart:
+# Streamlit Community Cloud failed to pull the new commit eight times in a row,
+# reported it only in a log, and served an ImportError on two of nine pages for two
+# and a half hours while every offline gate stayed green. It was found by a person
+# opening the app, which is not a monitoring strategy.
+#
+# Hourly, not more often. The outage lasted 150 minutes; an hourly check bounds the
+# next one to 60. Going faster mostly buys false alarms from cold containers, and a
+# scheduled check that cries wolf is a scheduled check nobody opens. `verify_live_app`
+# already retries each page once for the same reason.
+#
+# The traffic is a second, smaller benefit: Community Cloud parks idle apps behind an
+# interstitial, and an hourly visitor keeps a public demo awake.
+#
+# No secrets. The repository is public and so is the app, which is why this can exist
+# at all -- the check needs nothing but a browser and a URL.
+
+name: Verify live app
+
+on:
+  schedule:
+    - cron: "35 * * * *"
+  workflow_dispatch:
+    inputs:
+      base-url:
+        description: "App to check (defaults to the published deployment)"
+        required: false
+        default: "https://vn-air-quality-weather.streamlit.app"
+
+concurrency:
+  # Two overlapping runs would report the same outage twice and tell nobody anything
+  # new. The newer run is the one worth keeping.
+  group: verify-live-app
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # `qa` and nothing else. The extra brings playwright at the version pyproject
+      # pins; the base runtime comes with it because extras are additive, and goes
+      # unused here -- this job imports none of the project, it talks to the
+      # deployment over HTTP like any other reader. One pinned version beats a second
+      # list that drifts from the first.
+      - name: Install the browser gate dependencies
+        run: |
+          pip install -e ".[qa]"
+          python -m playwright install --with-deps chromium
+
+      - name: Check every page renders
+        run: |
+          python scripts/verify_live_app.py \
+            --base-url "${{ inputs.base-url || 'https://vn-air-quality-weather.streamlit.app' }}"
