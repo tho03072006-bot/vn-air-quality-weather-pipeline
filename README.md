@@ -200,6 +200,37 @@ anchors; the custom page supports Vietnam place search and validated WGS84
 coordinates. Every modeled view shows source, coverage and confidence labels
 and avoids presenting the planning heuristic as official VN_AQI.
 
+## Read API
+
+A read-only HTTP view of the same marts, for consumers that want the numbers
+without the UI. It runs from the project root like the dashboard, reuses the same
+`dashboard.data_access` queries rather than restating their SQL, and opens every
+connection with `read_only=True`.
+
+```powershell
+python -m pip install --editable ".[api]"
+$env:DUCKDB_PATH = (Resolve-Path "data\warehouse\demo.duckdb")
+python -m uvicorn api.main:app --reload
+```
+
+Endpoints: `GET /v1/health`, `GET /v1/current`, `GET /v1/current/{province_code}`
+and `GET /v1/forecast/{province_code}?lead_hours=`. Interactive docs at `/docs`.
+
+Every row keeps `source_type` and `coverage_tier` so a consumer can tell a modelled
+estimate from an observation, and every forecast keeps `forecast_issued_at_utc` so
+it can tell which model run it is reading. Each response carries a `disclosure`
+object, because a consumer parsing JSON never sees the Trust page.
+
+`mart_model_station_discrepancy` is deliberately **not** exposed. It measures a CAMS
+grid cell against one street-level station — model error and representativeness
+error added together — and served over an API, stripped of the caveats the Trust
+page renders beside it, that number becomes a quoted accuracy figure in somebody
+else's chart. This API publishes no accuracy figure at all.
+
+`/v1/health` answers 503 when the warehouse is missing or incomplete, rather than
+200 with a sad payload: a health endpoint that reports success while the thing it
+reports on is unreadable is a check that cannot fail.
+
 ## Deployment
 
 The Streamlit Community Cloud deployment target is deliberately simple: the app

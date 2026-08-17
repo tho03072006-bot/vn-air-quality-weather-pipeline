@@ -36,6 +36,19 @@ dev = [
     "pytest-cov>=6,<8",
     "ruff>=0.15,<1",
 ]
+# The read API only. Kept out of the default group for the same reason the transform
+# engines are: the dashboard never imports it, and a read-only app runtime should not
+# carry a web framework it does not use.
+#
+# Which environments this changes, checked rather than assumed after a previous extra
+# was added to three of the four places that install this project and turned CI red.
+# Only CI needs it, because only CI runs pytest: refresh-demo-warehouse installs
+# `etl` and runs pipelines, airflow/Dockerfile runs DAGs, and requirements.txt serves
+# the dashboard -- none of the three imports `api`.
+api = [
+    "fastapi>=0.141,<1",
+    "uvicorn>=0.52,<1",
+]
 # Browser-driven layout checks only. AppTest has no DOM and no layout engine, so it
 # cannot see a chart wider than its container or a value clipped by CSS -- both of
 # which shipped, and one of which recurred at a breakpoint the first fix did not
