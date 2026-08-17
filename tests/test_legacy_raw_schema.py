@@ -40,6 +40,11 @@ COLUMNS_ADDED_AFTER_FIRST_LOAD = {
     "air_quality_hourly": ("station_latitude", "station_longitude"),
 }
 
+# Whole tables added after warehouses already existed. An absent table is the harsher
+# case: a missing column can be aliased around by accident, while a missing relation
+# stops dbt outright, and the published asset has never contained this one.
+TABLES_ADDED_AFTER_FIRST_LOAD = ("air_quality_at_station_hourly",)
+
 
 def _dbt_executable() -> Path | None:
     name = "dbt.exe" if os.name == "nt" else "dbt"
@@ -70,6 +75,8 @@ def legacy_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Path:
         for table, columns in COLUMNS_ADDED_AFTER_FIRST_LOAD.items():
             for column in columns:
                 connection.execute(f"alter table raw.{table} drop column {column}")
+        for table in TABLES_ADDED_AFTER_FIRST_LOAD:
+            connection.execute(f"drop table raw.{table}")
     return database
 
 

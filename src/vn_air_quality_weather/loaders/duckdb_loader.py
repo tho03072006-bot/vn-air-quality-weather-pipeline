@@ -9,6 +9,7 @@ from vn_air_quality_weather.models import (
     ModeledAirQualityHourly,
     ObservedAirQualityHourly,
     PipelineRunAudit,
+    StationModeledAirQualityHourly,
     WeatherForecastHourly,
     WeatherHourly,
 )
@@ -22,6 +23,7 @@ class LoadSummary:
     database_path: Path
     weather_forecast_rows: int = 0
     air_quality_forecast_rows: int = 0
+    station_modeled_rows: int = 0
 
 
 def load_incremental(
@@ -33,6 +35,7 @@ def load_incremental(
     pipeline_runs: list[PipelineRunAudit] | None = None,
     weather_forecasts: list[WeatherForecastHourly] | None = None,
     air_quality_forecasts: list[AirQualityForecastHourly] | None = None,
+    station_modeled_air_quality: list[StationModeledAirQualityHourly] | None = None,
     pipeline_name: str = "vn_air_quality_weather",
 ) -> LoadSummary:
     """Merge a batch into DuckDB using stable natural keys."""
@@ -47,6 +50,7 @@ def load_incremental(
     run_audit_data = [_serialize_dataclass(record) for record in pipeline_runs or []]
     weather_forecast_data = [_serialize_dataclass(record) for record in weather_forecasts or []]
     air_quality_forecast_data = air_quality_forecast_rows(air_quality_forecasts or [])
+    station_modeled_data = station_modeled_air_quality_rows(station_modeled_air_quality or [])
 
     pipeline = dlt.pipeline(
         pipeline_name=pipeline_name,
@@ -122,6 +126,29 @@ def load_incremental(
                 write_disposition="merge",
             )
         )
+    if station_modeled_data:
+        resources.append(
+            dlt.resource(
+                station_modeled_data,
+                name="air_quality_at_station_hourly",
+                columns={
+                    "station_latitude": {"data_type": "double", "nullable": False},
+                    "station_longitude": {"data_type": "double", "nullable": False},
+                    "grid_latitude": {"data_type": "double", "nullable": True},
+                    "grid_longitude": {"data_type": "double", "nullable": True},
+                },
+                # station_id rather than city_key leads the key: this grain is one
+                # station, and two stations in the same city are two different places
+                # the model can be sampled at.
+                primary_key=[
+                    "station_id",
+                    "pollutant",
+                    "observed_at_utc",
+                    "source_name",
+                ],
+                write_disposition="merge",
+            )
+        )
     if not resources:
         return LoadSummary((), 0, 0, database_path)
 
@@ -133,6 +160,7 @@ def load_incremental(
         database_path=database_path,
         weather_forecast_rows=len(weather_forecast_data),
         air_quality_forecast_rows=len(air_quality_forecast_data),
+        station_modeled_rows=len(station_modeled_data),
     )
 
 
@@ -166,6 +194,47 @@ def modeled_air_quality_rows(
                     "source_type": record.source_type,
                     "grid_latitude": record.grid_latitude,
                     "grid_longitude": record.grid_longitude,
+                }
+            )
+    return rows
+
+
+def station_modeled_air_quality_rows(
+    records: list[StationModeledAirQualityHourly],
+) -> list[dict[str, Any]]:
+    """Turn the wide payload into one row per pollutant, keyed on the station.
+
+    Same shape as modeled_air_quality_rows and a separate function on purpose: these
+    rows must never reach air_quality_hourly, where a new source_type would become a
+    third series in every city-grain model downstream.
+    """
+
+    rows: list[dict[str, Any]] = []
+    pollutant_fields = {
+        "pm25": "pm2_5",
+        "pm10": "pm10",
+        "no2": "nitrogen_dioxide",
+        "o3": "ozone",
+    }
+    for record in records:
+        for pollutant, field_name in pollutant_fields.items():
+            value = getattr(record, field_name)
+            if value is None:
+                continue
+            rows.append(
+                {
+                    "station_id": record.station_id,
+                    "city_key": record.city_key,
+                    "pollutant": pollutant,
+                    "unit": "µg/m³",
+                    "observed_at_utc": record.observed_at_utc,
+                    "value": value,
+                    "station_latitude": record.station_latitude,
+                    "station_longitude": record.station_longitude,
+                    "grid_latitude": record.grid_latitude,
+                    "grid_longitude": record.grid_longitude,
+                    "source_name": record.source_name,
+                    "source_type": record.source_type,
                 }
             )
     return rows

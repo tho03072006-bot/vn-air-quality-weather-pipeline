@@ -33,3 +33,11 @@ sources:
         freshness:
           warn_after: {count: 18, period: hour}
           error_after: {count: 36, period: hour}
+      - name: air_quality_at_station_hourly
+        description: >
+          The model sampled at a monitoring station's own coordinates, kept out of
+          air_quality_hourly so a third source_type cannot become a third series in
+          every city-grain model. Deliberately carries no freshness block: it is
+          absent entirely from every warehouse written before it existed, including
+          the published release asset, and a freshness rule on a table that may not
+          be there would fail for the wrong reason.

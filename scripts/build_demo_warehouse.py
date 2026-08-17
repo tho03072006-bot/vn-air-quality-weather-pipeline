@@ -18,6 +18,7 @@ from vn_air_quality_weather.models import (
     ModeledAirQualityHourly,
     ObservedAirQualityHourly,
     PipelineRunAudit,
+    StationModeledAirQualityHourly,
     WeatherForecastHourly,
     WeatherHourly,
 )
@@ -62,6 +63,10 @@ OBSERVED_STATIONS = {
 # so on their own they cannot tell a mart that excludes flagged readings apart
 # from one that averages them in.
 CO_LOCATED_STATION = ("1003", "Demo Hanoi roadside station", 2005, (0.006, 0.009))
+# How far the model at the station sits from the model at the anchor, per city.
+# Different per city on purpose: one shared factor would let a decomposition that
+# ignores which station it is looking at produce the right answer by accident.
+STATION_MODEL_FACTORS = {"hanoi": 1.35, "ho_chi_minh": 0.88}
 CO_LOCATED_CITY_KEY = "hanoi"
 CO_LOCATED_FLAGGED_HOUR = 10
 FLAGGED_HOUR = 23
@@ -103,6 +108,7 @@ def build_demo(
     weather: list[WeatherHourly] = []
     modeled: list[ModeledAirQualityHourly] = []
     observed: list[ObservedAirQualityHourly] = []
+    station_modeled: list[StationModeledAirQualityHourly] = []
     air_quality_forecasts: list[AirQualityForecastHourly] = []
     weather_forecasts: list[WeatherForecastHourly] = []
     runs: list[PipelineRunAudit] = []
@@ -179,6 +185,29 @@ def build_demo(
                 station_id, station_name, sensors, offset = station
                 station_latitude = round(city.latitude + offset[0], 6)
                 station_longitude = round(city.longitude + offset[1], 6)
+
+                # The model sampled at the station rather than at the anchor. The
+                # factor is what makes the representativeness term discriminating: a
+                # fixture where the two model series were identical would let a
+                # decomposition that never computed the spatial half pass unnoticed,
+                # and one where they differed by a constant everywhere would hide a
+                # decomposition that ignored which station it was looking at.
+                factor = STATION_MODEL_FACTORS[city.key]
+                station_modeled.append(
+                    StationModeledAirQualityHourly(
+                        station_id=station_id,
+                        city_key=city.key,
+                        observed_at_utc=timestamp,
+                        pm2_5=round(pm25 * factor, 3),
+                        pm10=round(pm25 * 1.45 * factor, 3),
+                        nitrogen_dioxide=round((5.0 + city_index + hour * 0.1) * factor, 3),
+                        ozone=round((42.0 + hour * 0.8 + day_index * 4) * factor, 3),
+                        station_latitude=station_latitude,
+                        station_longitude=station_longitude,
+                        grid_latitude=station_latitude,
+                        grid_longitude=station_longitude,
+                    )
+                )
                 for pollutant, sensor_id in sensors.items():
                     # A deliberate gap so the Nowcast spine has a hole to handle.
                     if pollutant == "pm25" and hour in {3, 4}:
@@ -394,6 +423,7 @@ def build_demo(
         database_path=database_path,
         weather=weather,
         observed_air_quality=observed,
+        station_modeled_air_quality=station_modeled,
         modeled_air_quality=modeled,
         pipeline_runs=runs,
         weather_forecasts=weather_forecasts,

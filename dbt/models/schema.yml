@@ -362,3 +362,25 @@ models:
           - accepted_values:
               arguments:
                 values: ['1-24h', '25-48h', '49-72h']
+
+  - name: mart_station_representativeness
+    description: >
+      Splits the model-station gap that forecast drift did not explain into
+      distance and model offset, by comparing the model at the province anchor
+      with the model at the station's own coordinates. Neither column is
+      accuracy, and neither is their sum.
+    columns:
+      - name: station_id
+        data_tests: [not_null]
+      - name: pollutant
+        data_tests: [not_null]
+      - name: model_paired_hours
+        data_tests: [not_null]
+      - name: observed_paired_hours
+        data_tests: [not_null]
+
+  - name: stg_air_quality_at_station
+    description: >
+      The model sampled at station coordinates. Compiles to a typed empty set on
+      any warehouse written before the table existed, which every published
+      release asset is until it is rebuilt.

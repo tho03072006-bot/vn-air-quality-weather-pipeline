@@ -7,11 +7,12 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import boto3
 
-from vn_air_quality_weather.cities import CITIES
+from vn_air_quality_weather.cities import CITIES, City
 from vn_air_quality_weather.clients.open_aq import (
     OpenAQClient,
     normalize_sensor_hours,
@@ -29,6 +30,7 @@ from vn_air_quality_weather.models import (
     ModeledAirQualityHourly,
     ObservedAirQualityHourly,
     PipelineRunAudit,
+    StationModeledAirQualityHourly,
     WeatherHourly,
 )
 from vn_air_quality_weather.settings import Settings, get_settings
@@ -81,6 +83,97 @@ class PipelineRunSummary:
     raw_objects_reused: int = 0
 
 
+def _sample_model_at_stations(
+    *,
+    open_meteo: OpenMeteoClient,
+    raw_store: RawJsonStore,
+    raw_counts: "_RawObjectCounts",
+    city: City,
+    selections: dict[str, Any],
+    data_date: date,
+    ingestion_time: datetime,
+    interval_start: datetime,
+    interval_end: datetime,
+    run_id: str,
+) -> list[StationModeledAirQualityHourly]:
+    """Fetch the model at each station's own coordinates, one call per station.
+
+    This is the measurement finding O was missing. Comparing it against the anchor
+    series gives representativeness -- pure distance, needing no observation -- and
+    against the station's own readings gives the model's offset where the instrument
+    actually stands. Neither is available from the anchor series alone.
+
+    One call per distinct station, not per sensor: several sensors share a position
+    and the model does not care which pollutant is being asked about. Stations without
+    coordinates are skipped rather than guessed at; the decomposition then reports an
+    absent comparison, which is true, instead of a zero displacement, which is not.
+
+    Open-Meteo needs no API key, so this runs on the same terms as the anchor fetch it
+    sits beside.
+    """
+
+    positions: dict[str, tuple[float, float]] = {}
+    for selection in selections.values():
+        if selection.latitude is None or selection.longitude is None:
+            continue
+        positions.setdefault(selection.station_id, (selection.latitude, selection.longitude))
+
+    records: list[StationModeledAirQualityHourly] = []
+    for station_id, (latitude, longitude) in sorted(positions.items()):
+        probe = City(
+            key=f"{city.key}__station_{station_id}",
+            display_name=f"{city.display_name} station {station_id}",
+            latitude=latitude,
+            longitude=longitude,
+        )
+        LOGGER.info(
+            "extract source=open_meteo_cams_at_station city=%s station=%s date=%s",
+            city.key,
+            station_id,
+            data_date,
+        )
+        payload = open_meteo.fetch_modeled_air_quality(probe, data_date)
+        write_result = raw_store.write(
+            source="open_meteo_air_quality_at_station",
+            city_key=f"{city.key}__{station_id}",
+            ingestion_date=ingestion_time.date(),
+            run_id=run_id,
+            payload=build_raw_envelope(
+                source="open_meteo_air_quality_at_station",
+                city_key=city.key,
+                requested_at=ingestion_time,
+                interval_start=interval_start,
+                interval_end=interval_end,
+                run_id=run_id,
+                request_parameters={
+                    "station_id": station_id,
+                    "coordinates": [latitude, longitude],
+                    "hourly": list(AIR_QUALITY_VARIABLES),
+                },
+                response=payload,
+            ),
+        )
+        raw_counts.record(write_result)
+
+        for record in normalize_modeled_air_quality(city.key, payload):
+            records.append(
+                StationModeledAirQualityHourly(
+                    station_id=station_id,
+                    city_key=city.key,
+                    observed_at_utc=record.observed_at_utc,
+                    pm2_5=record.pm2_5,
+                    pm10=record.pm10,
+                    nitrogen_dioxide=record.nitrogen_dioxide,
+                    ozone=record.ozone,
+                    station_latitude=latitude,
+                    station_longitude=longitude,
+                    grid_latitude=record.grid_latitude,
+                    grid_longitude=record.grid_longitude,
+                )
+            )
+    return records
+
+
 def run_day(
     data_date: date,
     *,
@@ -101,6 +194,7 @@ def run_day(
 
     weather_records: list[WeatherHourly] = []
     modeled_records: list[ModeledAirQualityHourly] = []
+    station_modeled_records: list[StationModeledAirQualityHourly] = []
     observed_records: list[ObservedAirQualityHourly] = []
     raw_counts = _RawObjectCounts()
 
@@ -194,6 +288,20 @@ def run_day(
                 raw_counts.record(write_result)
 
                 selections = select_city_sensors(city.key, locations_payload)
+                station_modeled_records.extend(
+                    _sample_model_at_stations(
+                        open_meteo=open_meteo,
+                        raw_store=raw_store,
+                        raw_counts=raw_counts,
+                        city=city,
+                        selections=selections,
+                        data_date=data_date,
+                        ingestion_time=ingestion_time,
+                        interval_start=interval_start,
+                        interval_end=interval_end,
+                        run_id=run_id,
+                    )
+                )
                 for selection in selections.values():
                     hours_payload = open_aq.fetch_sensor_hours(
                         selection.sensor_id, interval_start, interval_end
@@ -226,6 +334,7 @@ def run_day(
         weather=weather_records,
         observed_air_quality=observed_records,
         modeled_air_quality=modeled_records,
+        station_modeled_air_quality=station_modeled_records,
     )
     modeled_measurement_rows = load_summary.air_quality_rows - len(observed_records)
     finished_at = datetime.now(UTC)

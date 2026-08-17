@@ -57,6 +57,41 @@ class ObservedAirQualityHourly:
 
 
 @dataclass(frozen=True, slots=True)
+class StationModeledAirQualityHourly:
+    """The model sampled at a monitoring station's own coordinates.
+
+    Deliberately its own table rather than another source_type inside
+    air_quality_hourly. That table's source_type is grouped and partitioned by every
+    model downstream of it and filtered by none, so a third value would quietly become
+    a third series in the city mart, a third option in the History page's source
+    picker, and a third input to the VN_AQI models. The project's rule is that
+    observations and model output never become one series; this is model output at a
+    station's coordinates, which is the easiest thing in the warehouse to mistake for
+    an observation.
+
+    It exists to split the half of finding O that forecast drift did not explain.
+    Against the anchor series it gives representativeness -- pure distance, no
+    observation needed, so it is measurable even where no station reports. Against the
+    station's own readings it gives the model's offset where the instrument actually
+    stands.
+    """
+
+    station_id: str
+    city_key: str
+    observed_at_utc: datetime
+    pm2_5: float | None
+    pm10: float | None
+    nitrogen_dioxide: float | None
+    ozone: float | None
+    station_latitude: float
+    station_longitude: float
+    grid_latitude: float
+    grid_longitude: float
+    source_name: str = "open_meteo_cams"
+    source_type: str = "modeled_at_station"
+
+
+@dataclass(frozen=True, slots=True)
 class PipelineRunAudit:
     """One row per pipeline execution, used to prove freshness and lineage.
 
