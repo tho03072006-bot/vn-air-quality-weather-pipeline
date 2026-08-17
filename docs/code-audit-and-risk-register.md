@@ -928,9 +928,54 @@ separate forecast error from anchor-versus-station representativeness;
 had been no empirical comparison became false as soon as the verification fact was
 built, while its gate could still pass on the obsolete claim.
 
-One quantitative separation remains open: compare the model with itself at the
-station's exact coordinates instead of comparing the province anchor with the
-station. That has not been built; there is no more detailed plan recorded here.
+**Update, 2026-08-17: one of the two unknowns is now measured, and it needed no new
+data at all.** The gap decomposes exactly, by an identity rather than a model:
+
+```
+F_anchor − O_station = (F_anchor − M_anchor)   forecast drift
+                     + (M_anchor − M_station)  representativeness
+                     + (M_station − O_station) model against reality at the station
+```
+
+The first term compares the forecast with the same model's own analysis of the same
+hour at the same coordinate. The project has been fetching that analysis since the
+beginning — `mart_city_air_quality_hourly` with `source_type = 'modeled'` — so the
+term was computable all along and nobody had computed it. `fct_forecast_vs_analysis`
+and `mart_forecast_vs_analysis` now do.
+
+| Series | Published model-station ratio | Forecast drift, same bands |
+|---|---|---|
+| hanoi o3 | 4.67 / 4.75 / 4.77 | **1.07 / 0.95 / 1.03** |
+| hanoi pm25 | 2.13 / 2.01 / 1.76 | **0.99 / 0.87 / 0.96** |
+| hanoi pm10 | 1.09 / 1.03 / 1.01 | 0.98 / 0.87 / 0.94 |
+| hcm pm25 | 1.40 / 0.95 / 0.70 | 1.12 / 0.98 / 0.93 |
+
+The forecast reproduces the analysis to within roughly ten percent and shows no
+growth across lead bands. **The published gap is not the forecast being wrong.**
+
+**A drift near 1.0 is not an accuracy result, and it is a sharper way to overclaim
+than the one this register already guards against, because it looks like good news.**
+The forecast and the analysis are the same model twice. If that model reads 3.9× the
+station at a coordinate, a faithful forecast reads 3.9× the station too. What the
+term excludes is forecasting as the explanation. What it leaves entirely open is
+whether either number is right. The Trust page publishes the exclusion and that
+caveat together, and `verify_streamlit.py` fails if the caveat is removed while the
+table stays — proved by mutation.
+
+Three assumptions the arithmetic rests on, verified rather than asserted: both series
+are sampled at the same coordinate (the forecast anchor comes from the province seed,
+the analysis from `CITIES` in Python — two registries with no link, and
+`tests/test_decomposition_assumptions.py` fails the moment they diverge); both come
+from Open-Meteo's air-quality endpoint; both are µg/m³, asserted by a dbt test.
+
+**What remains open is the split of the rest.** Of the 3.9× left in Hanoi ozone, how
+much is a province grid cell sitting somewhere other than Khuất Duy Tiến, and how much
+is the model being offset even at the right place? That needs CAMS sampled at the
+station's own coordinates. Those coordinates already exist: 57 stored
+`openaq_locations` payloads carry them for all three cities, because the immutable raw
+archive kept what `SensorSelection` discarded. `fetch_modeled_air_quality` takes a
+`City`-shaped value and accepts `start_date`/`end_date`, so the existing paired window
+can be backfilled rather than waited for. No client change is required.
 
 **The rule this leaves behind.** A new measurement can make an old statement false,
 and a gate that still passes the false statement is as bad as a gate that cannot

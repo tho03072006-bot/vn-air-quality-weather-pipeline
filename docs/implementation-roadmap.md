@@ -444,9 +444,11 @@ figure; until they exist the UI says confidence.
    label.
 3. ~~Forecast verification fact: each vintage joined to the observation that
    later validated it.~~ **Built** (`de0186e`). It does not unlock item 4; see above.
-4. MAE / RMSE / bias by location, pollutant and lead hour. **Blocked** on separating
-   model error from representativeness error, which needs the model sampled at
-   station coordinates rather than at the province anchor.
+4. MAE / RMSE / bias by location, pollutant and lead hour. **Still blocked, but the
+   blocker is now half its former size.** Forecast drift is measured
+   (`mart_forecast_vs_analysis`) and is near 1.0 with no growth across lead bands, so
+   the published gap is not forecast error. What is still unsplit is the remainder:
+   representativeness versus model offset at the station's own coordinates.
 5. Empirical confidence replacing the lead-time heuristic.
 6. ~~Contiguous 2h / 3h outdoor windows (closes UI gap G7).~~ **Built** (`6de2136`):
    2h and 3h blocks of adjacent hours, scored by the worst hour, broken by any hour
@@ -468,7 +470,7 @@ can be built honestly, rather than guessed at:
 |---|---|
 | 1 | OpenAQ licence terms per provider, and whether station metadata may be redistributed. Still open, and now disclosed rather than assumed: every source in `sources.py` is registered `UNVERIFIED` and the Trust page renders that state to readers |
 | 3 | ~~How long to wait before an observation counts as validating a forecast hour~~ — settled at a single 168-hour threshold. A second 48-hour threshold was designed and dropped because it classified no row differently; the reasoning is in the model file |
-| 4 | Two things, not one. **(a)** Separate model error from representativeness error, which needs the model sampled at station coordinates — without it any MAE is a representativeness artefact wearing an accuracy label. **(b)** Minimum paired sample size before an error figure may be shown at all; publishing MAE from a week of data would be its own false claim |
+| 4 | Two things, not one. **(a)** Separate model error from representativeness error. Half done: forecast drift is measured and is not the cause, so what remains is sampling the model at station coordinates — the coordinates are already in the raw archive and no client change is needed. Without that split, any MAE is a representativeness artefact wearing an accuracy label. **(b)** Minimum paired sample size before an error figure may be shown at all; publishing MAE from a week of data would be its own false claim |
 | 5 | Whether empirical confidence replaces or sits beside the current lead-time heuristic during the transition |
 | 7, 8 | Where user state lives. The project has no identity model and no user store; `st.session_state` does not survive a restart |
 | 9 | Delivery semantics: at-least-once versus at-most-once, and what a user sees when a send fails. The existing idempotency key is designed for the former |

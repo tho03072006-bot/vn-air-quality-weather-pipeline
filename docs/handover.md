@@ -27,8 +27,8 @@ true when written and false when read.
 |---|---|---|---|
 | Format | `ruff format --check .` | 95 files clean | 2026-08-17 |
 | Lint | `ruff check .` | pass | 2026-08-17 |
-| Unit tests | `pytest` | **330 passed, 1 skipped**, coverage 89.76% | 2026-08-17 |
-| dbt | `dbt build` | **PASS=145, ERROR=0** | 2026-08-17 |
+| Unit tests | `pytest` | **333 passed, 1 skipped**, coverage 89.76% | 2026-08-17 |
+| dbt | `dbt build` | **PASS=162, ERROR=0** | 2026-08-17 |
 | Source freshness | `dbt source freshness` | pass | 2026-08-17 |
 | Dashboard | `python scripts/verify_streamlit.py` | **32/32** — 9 fresh pages + interactions + 6 exhausted + 16 on an unreadable warehouse | 2026-08-17 |
 | Layout | `verify_layout.py --skip-live-api` | **16/16** (8 pages x 2 viewports) | 2026-08-17 |
@@ -338,11 +338,18 @@ Recorded so they do not cost it twice.
 
 In order:
 
-1. **Separate the two error terms in finding O.** Compare the model with itself at a
-   station's exact coordinates instead of comparing the province anchor with the
-   station. Until that exists, no accuracy figure can be published honestly, and
-   roadmap items 4 and 5 are blocked rather than pending. This is the largest open
-   item and the only one that changes what the product may claim.
+1. **Finish the finding O separation — half of it is done.** Forecast drift is now
+   measured against the model's own analysis at the same coordinate, needs no new
+   data, and sits near 1.0 with no growth across lead bands: the published gap is not
+   forecast error. What remains is splitting the rest into representativeness and
+   model offset, which needs CAMS sampled at the station's own coordinates. The
+   coordinates are already in 57 stored `openaq_locations` payloads, and
+   `fetch_modeled_air_quality` takes a `City`-shaped value with `start_date`/`end_date`
+   — so the existing paired window can be backfilled and no client change is needed.
+   Until that split exists, no accuracy figure can be published honestly.
+   **The trap to carry forward:** a drift near 1.0 is not accuracy. The forecast and
+   the analysis are the same model twice, and a model offset by 3.9× produces a
+   faithful forecast offset by 3.9×.
 2. **Decide whether the deployment should reload its warehouse.** Pipeline health now
    shows that the served file and the published asset can diverge; nothing acts on it.
    The options and the constraints that must hold — `read_only=True`, atomic writes,
