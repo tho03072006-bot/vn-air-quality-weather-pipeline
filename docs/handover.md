@@ -115,6 +115,18 @@ docker compose -f airflow\docker-compose.yml up airflow-init
 docker compose -f airflow\docker-compose.yml up -d
 ```
 
+After every push that reaches the deployment:
+
+```powershell
+python scripts\verify_live_app.py
+```
+
+If it reports `ImportError` on exactly the pages whose import list changed, the code
+arrived and the process did not restart — open **Manage app** on
+<https://vn-air-quality-weather.streamlit.app/> and choose **Reboot app**, then run
+the check again. This is a required step, not a troubleshooting one: see the first
+trap in §6.
+
 For a one-off daily-DAG test of data date `2026-08-07`, pass the following
 interval end (not the data date) as the logical date:
 
@@ -231,6 +243,19 @@ Recorded so they do not cost it twice.
 - **Streamlit caches imported modules.** Editing a library module and reloading the
   page shows the old code, and can show an `ImportError` for something that exists.
   Restart the server before believing a browser result.
+- **Every deploy that adds a symbol to a library module needs a manual reboot.**
+  Measured twice, on 2026-08-16 and again on 2026-08-17 within minutes of a push.
+  Community Cloud re-executes page scripts on each run but keeps imported modules in
+  `sys.modules`, so a page file that has just gained
+  `from dashboard.components import source_registry` meets the *previous*
+  `dashboard.components` and raises `ImportError`. Exactly the pages whose own import
+  list changed will fail; every other page stays green, which is what makes the
+  signature recognisable.
+  **This also tells you the pull worked.** If the checkout had not advanced, the page
+  file would still be the old one and would not reference the new symbol at all — so
+  a page failing on a *new* import is proof the code arrived and the process did not
+  restart. Reboot from **Manage app**; there is no API for it, and
+  `verify_live_app.py` will keep failing until someone does.
 - **Streamlit Community Cloud can fail to pull, and only whisper about it.** Eight
   consecutive `Updating the app files has failed: exit status 1` lines over two and a
   half hours, with no signal anywhere except the log behind **Manage app**. The
