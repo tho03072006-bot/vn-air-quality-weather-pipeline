@@ -601,13 +601,33 @@ That accumulation is wanted: Phase 6 item 3 needs vintage history to join a fore
 against the observation that later validated it. Without it there is no route to an
 accuracy figure.
 
-**What is missing is a stated bound.** Measured growth is **1 MB per run**, and the
+**What was missing is a stated bound.** Measured growth is **1 MB per run**, and the
 schedule is six-hourly, so roughly **1.4 GB per year** in a single local DuckDB file
-that also serves the dashboard. Nothing prunes, nothing monitors, and nothing warns.
-This is not urgent at current size, but it must be settled before item 11 (serving
-database), and the decision belongs with it: how long a vintage stays queryable,
-whether old vintages move to raw-only, and who notices when the file crosses a
-threshold.
+that also serves the dashboard.
+
+**Decided on 2026-08-17: no cap on the local warehouse. Keep every vintage.** The
+deployed asset already prunes to the newest vintage and ships at ~12 MB, so this
+concerns only the development file, currently 30.7 MB across 13 vintages.
+
+The reasoning, recorded because the cheaper option looks more responsible than it is.
+Capping at thirty days would bound the file at roughly 120 MB, and would also delete
+the only evidence that can ever answer whether a forecast was right. Vintage history
+is not a cache; it is the measurement. `fct_forecast_verification` reads it, finding O
+is built on it, and the separation of model error from representativeness error —
+the largest open item in this project — needs more of it, not less. A gigabyte a year
+on a development machine is a cost worth paying for data that cannot be recreated
+after it is dropped.
+
+**The bound is a review threshold, not a prune.** Revisit when the file passes ~2 GB,
+or sooner if a query on `fct_air_quality_forecast` becomes measurably slower; both are
+observable rather than scheduled. Nothing prunes automatically, and that is now a
+decision rather than an omission.
+
+Still open, and unchanged by this: item 11 (serving database) must settle where
+vintages live once the warehouse stops being one local file. Archiving cold vintages
+to Parquet outside DuckDB was considered and deferred — it keeps the history while
+bounding the served file, but it adds a job to maintain and a read path to remember,
+and neither is worth building before the file size makes it necessary.
 
 ---
 

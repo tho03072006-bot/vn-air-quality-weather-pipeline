@@ -472,7 +472,7 @@ can be built honestly, rather than guessed at:
 | 5 | Whether empirical confidence replaces or sits beside the current lead-time heuristic during the transition |
 | 7, 8 | Where user state lives. The project has no identity model and no user store; `st.session_state` does not survive a restart |
 | 9 | Delivery semantics: at-least-once versus at-most-once, and what a user sees when a send fails. The existing idempotency key is designed for the former |
-| 11 | Whether DuckDB stays. The single-writer pool is an accepted local limitation; a serving database is the point at which it stops being acceptable. Also a vintage retention policy: measured growth is 1 MB per forecast run, ~1.4 GB/year at the six-hourly schedule, in the same file the dashboard reads (section J of the audit register) |
+| 11 | Whether DuckDB stays. The single-writer pool is an accepted local limitation; a serving database is the point at which it stops being acceptable. Vintage retention is **decided** for the local file — no cap, keep everything, review at ~2 GB — because the history is the measurement rather than a cache (finding J). What item 11 must still settle is where vintages live once the warehouse stops being one local file |
 
 ### Known limitations carried forward, unresolved
 

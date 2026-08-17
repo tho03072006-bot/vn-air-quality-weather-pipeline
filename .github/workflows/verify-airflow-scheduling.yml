@@ -1,0 +1,105 @@
+# Prove Airflow can still schedule, once a week.
+#
+# `airflow dags test` runs every task in-process, so it never touches the executor
+# and never calls the Task Execution API. It reported 4/4 success while every
+# scheduled task was dying with an empty log -- finding M. `dags trigger` is the real
+# path, and scripts/verify_airflow_scheduling.ps1 drives it.
+#
+# Weekly rather than per-push, deliberately. This job builds a ~4 GB image and starts
+# five containers; on every push it would take CI from about six minutes to twenty
+# and add the flakiest failure mode there is, container startup timing. What it
+# guards against is drift in scheduler configuration, which changed exactly once and
+# is not touched by ordinary work. Per-push CI already imports both DAGs inside the
+# real Airflow image and asserts their timetable types, which is the part that moves.
+#
+# It calls Open-Meteo for 34 provinces, like refresh-demo-warehouse does. At weekly
+# cadence that is well inside the free tier, and the forecast DAG needs no API key.
+#
+# The warehouse is seeded with build_demo_warehouse first. Without it the DAG's dbt
+# step would build against raw tables that do not exist and fail for a reason that
+# has nothing to do with scheduling -- a gate that fails for the wrong reason teaches
+# people to ignore it.
+
+name: Verify Airflow scheduling
+
+on:
+  schedule:
+    # Mondays 03:20 UTC. Off the six-hourly warehouse refresh, which runs at :20.
+    - cron: "20 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: verify-airflow-scheduling
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scheduling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project
+        run: python -m pip install --upgrade --editable ".[etl]"
+
+      - name: Seed a warehouse for the DAG to extend
+        run: |
+          mkdir -p data/warehouse data/raw airflow/logs
+          python scripts/build_demo_warehouse.py \
+            --database data/warehouse/vn_air_quality_weather.duckdb
+
+      # The containers run as UID 50000 and every project directory here is a bind
+      # mount created by the runner user. Without this the DAG cannot write raw JSON,
+      # cannot write the warehouse, and cannot write its own task log -- and an
+      # unwritable log is indistinguishable from the execution-API failure this gate
+      # exists to detect. Broad permissions are acceptable on a throwaway runner.
+      - name: Make the bind mounts writable by the airflow user
+        run: chmod -R 777 data airflow/logs
+
+      - name: Provide the env file compose requires
+        run: cp .env.example .env
+
+      - name: Build the Airflow image
+        run: docker compose -f airflow/docker-compose.yml build
+
+      - name: Initialise the metadata database and the writer pool
+        run: docker compose -f airflow/docker-compose.yml up airflow-init
+
+      - name: Start the stack
+        run: |
+          docker compose -f airflow/docker-compose.yml up -d
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:8080/api/v2/version > /dev/null; then
+              echo "api-server up"; exit 0
+            fi
+            sleep 5
+          done
+          echo "api-server did not answer within 300s" >&2
+          docker compose -f airflow/docker-compose.yml ps
+          exit 1
+
+      # pwsh, not bash. The script is the same one a developer runs on Windows, and
+      # keeping one implementation is the point: a bash translation would be a second
+      # copy of the gate, free to disagree with the first about what passing means.
+      - name: Trigger a real DagRun and wait for it
+        shell: pwsh
+        run: ./scripts/verify_airflow_scheduling.ps1 -TimeoutMinutes 20
+
+      # An empty task log is the signature of the failure this gate was built for, so
+      # the container logs are where the evidence actually lives.
+      - name: Container logs
+        if: failure()
+        run: docker compose -f airflow/docker-compose.yml logs --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f airflow/docker-compose.yml down -v

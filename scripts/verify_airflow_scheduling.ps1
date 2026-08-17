@@ -37,7 +37,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Compose = Join-Path $ProjectRoot 'airflow\docker-compose.yml'
+# Forward slashes, because this also runs on a Linux CI runner under pwsh. Windows
+# accepts them everywhere; Linux does not accept the backslash form, and a path
+# joined as 'airflow\docker-compose.yml' there becomes a single filename that no
+# amount of docker-compose flags can rescue.
+$Compose = Join-Path $ProjectRoot 'airflow/docker-compose.yml'
 
 function Invoke-Airflow {
     <#
@@ -72,7 +76,7 @@ try {
     $running = & docker compose -f $Compose ps --status running --format '{{.Service}}'
     if ($LASTEXITCODE -ne 0 -or -not ($running -match 'airflow-scheduler')) {
         Write-Host "Airflow is not running. Start it first:" -ForegroundColor Yellow
-        Write-Host "  docker compose -f airflow\docker-compose.yml up -d" -ForegroundColor Yellow
+        Write-Host "  docker compose -f airflow/docker-compose.yml up -d" -ForegroundColor Yellow
         exit 2
     }
 
@@ -136,7 +140,7 @@ try {
     Invoke-Airflow @('tasks', 'states-for-dag-run', $DagId, $runId) | Out-String | Write-Host
     # An empty task log is itself the signature of the execution-API failure, so
     # point at the directory rather than assuming a traceback exists to print.
-    $logDir = Join-Path $ProjectRoot ("airflow\logs\dag_id={0}\run_id={1}" -f $DagId, $runId)
+    $logDir = Join-Path $ProjectRoot ("airflow/logs/dag_id={0}/run_id={1}" -f $DagId, $runId)
     Write-Host "Task logs: $logDir" -ForegroundColor Red
     Write-Host "An empty log there means the task process died before it could write one," -ForegroundColor Red
     Write-Host "which is what a bad AIRFLOW__CORE__EXECUTION_API_SERVER_URL looks like." -ForegroundColor Red
