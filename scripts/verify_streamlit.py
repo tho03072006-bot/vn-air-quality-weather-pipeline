@@ -28,6 +28,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import patch
 
+import duckdb
 from streamlit.testing.v1 import AppTest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -818,6 +819,113 @@ def _check_exhausted_horizon() -> list[str]:
     return failures
 
 
+# --- The warehouse the app cannot read -----------------------------------------
+#
+# Both arms above assume a warehouse that opens and answers. On a deployment that is
+# an assumption, not a fact: the code ships through git and the warehouse ships as a
+# release asset built by a different workflow on a different schedule, so the two can
+# disagree. An asset built before a mart existed, a compaction step that renamed a
+# catalog, a download that never completed -- each leaves the app running against a
+# warehouse that is absent or incomplete, and `trust.py` already carries a
+# `cached_relation_exists` guard written for exactly that case.
+#
+# What a reader must never meet in that state is a traceback, and what an operator
+# must never leak into a reader's page is a shell command. Neither had a check.
+#
+# Asserted as properties rather than as message text. Three pages phrase their empty
+# state differently -- `require_warehouse` has two wordings and `history.py` has its
+# own -- and pinning those strings here would make this arm a copy of the copy, which
+# is the failure this project keeps finding. What must hold is structural: nothing
+# raised, nothing was tabled from a warehouse that cannot be read, and the page said
+# something rather than stopping silently.
+
+# Every page that reads the warehouse. custom_location is absent deliberately: it
+# never queries the warehouse for its own flow, fetching from Open-Meteo on demand,
+# so "no warehouse" is not a state it has.
+DEGRADED_PAGES = (
+    "today.py",
+    "national_map.py",
+    "forecast.py",
+    "history.py",
+    "alerts.py",
+    "trust.py",
+    "compare.py",
+    "pipeline_health.py",
+)
+
+_EXPECTATION_BY_PAGE = {expectation.page: expectation for expectation in PAGES}
+
+
+def _check_degraded_page(app: AppTest, page: str) -> list[str]:
+    """Assert one page degrades honestly instead of breaking."""
+
+    expectation = _EXPECTATION_BY_PAGE[page]
+    problems = [f"raised {exception.value}" for exception in app.exception]
+    lowered = _page_text(app).lower()
+
+    if expectation.title_contains.lower() not in lowered:
+        problems.append(f"title missing {expectation.title_contains!r}")
+    # Per page, from the same table the healthy arm uses: pipeline_health is an
+    # operator surface and may name a command, the eight reader pages may not.
+    for needle in expectation.forbidden_text:
+        if needle.lower() in lowered:
+            problems.append(f"rendered {needle!r} at a reader who cannot act on it")
+    if not (app.error or app.warning or app.info):
+        problems.append("stopped without telling the reader why")
+    if app.dataframe:
+        problems.append(f"tabled {len(app.dataframe)} frame(s) from a warehouse it cannot read")
+    if app.metric:
+        problems.append(f"showed {len(app.metric)} metric(s) from a warehouse it cannot read")
+    return problems
+
+
+def _check_degraded_warehouse() -> list[str]:
+    """Drive every warehouse-reading page against an absent and an empty warehouse."""
+
+    failures: list[str] = []
+    original_database = os.environ.get("DUCKDB_PATH")
+    original_url = os.environ.get("DEMO_WAREHOUSE_URL")
+
+    with tempfile.TemporaryDirectory(prefix="streamlit-degraded-") as directory:
+        absent = Path(directory) / "vn_air_quality_weather.duckdb"
+        empty = Path(directory) / "empty" / "vn_air_quality_weather.duckdb"
+        empty.parent.mkdir(parents=True)
+        # A real DuckDB file with no analytics schema: the shape an asset takes when
+        # it is built but the models that fill it are not.
+        with duckdb.connect(str(empty)) as connection:
+            connection.execute("select 1")
+
+        try:
+            # The app downloads a published asset when the local file is missing, and
+            # "missing" is the entire point of the first scenario. Unset the URL so
+            # this arm cannot reach the network.
+            os.environ.pop("DEMO_WAREHOUSE_URL", None)
+            for label, database in (("absent", absent), ("empty", empty)):
+                os.environ["DUCKDB_PATH"] = str(database.resolve())
+                app = AppTest.from_file(str(APP_ENTRYPOINT)).run(timeout=60)
+                for page in DEGRADED_PAGES:
+                    app.switch_page(f"app_pages/{page}").run(timeout=60)
+                    problems = _check_degraded_page(app, page)
+                    if problems:
+                        failures.extend(f"{label} {page}: {problem}" for problem in problems)
+                        print(f"FAIL {label} warehouse dashboard/{page}")
+                        for problem in problems:
+                            print(f"     {problem}")
+                    else:
+                        print(f"PASS {label} warehouse dashboard/{page}")
+        finally:
+            for name, value in (
+                ("DUCKDB_PATH", original_database),
+                ("DEMO_WAREHOUSE_URL", original_url),
+            ):
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    return failures
+
+
 def main() -> None:
     app = AppTest.from_file(str(APP_ENTRYPOINT)).run(timeout=60)
     failures: list[str] = []
@@ -841,15 +949,17 @@ def main() -> None:
     else:
         print("PASS widget interactions")
 
-    # The exhausted arm runs even when the fresh arm failed, because a fresh-arm
-    # failure and an exhausted-arm failure have different causes and reporting only
-    # the first would hide the second for a whole round trip.
+    # Every arm runs even when an earlier one failed. A fresh-arm failure, an
+    # exhausted-arm failure and a degraded-warehouse failure have different causes,
+    # and stopping at the first would hide the others for a whole round trip.
     failures.extend(_check_exhausted_horizon())
+    failures.extend(_check_degraded_warehouse())
 
     if failures:
         print(
-            f"\n{len(failures)} problem(s) across {len(PAGES)} fresh pages "
-            f"and {len(EXHAUSTED_PAGES)} exhausted pages",
+            f"\n{len(failures)} problem(s) across {len(PAGES)} fresh pages, "
+            f"{len(EXHAUSTED_PAGES)} exhausted pages and "
+            f"{len(DEGRADED_PAGES)} pages on an unreadable warehouse",
             file=sys.stderr,
         )
         raise SystemExit(1)
