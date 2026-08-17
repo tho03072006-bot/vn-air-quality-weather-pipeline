@@ -65,10 +65,14 @@ jobs:
       #
       # dbt/ is in the list because dbt writes target/ and logs/ into its own project
       # directory. The first run of this workflow omitted it and build_analytics died
-      # with `dbt build ... exit status 2` -- an unhandled exception rather than a
-      # model failure, which is what being unable to create a directory looks like.
-      # Whether that was the cause is settled by the task-log step below, not asserted
-      # here.
+      # twice with `dbt build ... exit status 2` -- an unhandled exception rather than
+      # a model failure, which is what being unable to create a directory looks like.
+      # Adding dbt/ here, and nothing else touching dbt, made the next run pass.
+      #
+      # Stated as what it is: one change, one recovery, and a symptom that matches.
+      # Not an isolated proof -- no A/B was run, and the task-log step below only
+      # produces evidence on failure, so a green run says nothing about the cause. If
+      # this ever regresses, drop dbt/ from this line first and read the task log.
       - name: Make the bind mounts writable by the airflow user
         run: chmod -R 777 data airflow/logs dbt
 

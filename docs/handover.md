@@ -40,7 +40,7 @@ true when written and false when read.
 | Airflow DagBag | `airflow dags list-import-errors` | **0 import errors**, both DAGs registered | carried forward |
 | Airflow pool | `airflow pools list` | `warehouse_writer` present, **1 slot** | carried forward |
 | Airflow task code | `airflow dags test vn_air_quality_weather_forecast` | success, 4/4 tasks, 36.8s, 34/34 locations. **In-process — this does not exercise the scheduler**, see the row below and finding M | carried forward |
-| **Airflow scheduled execution** | `.\scripts\verify_airflow_scheduling.ps1` | **success, 4/4 tasks, 32s** via `dags trigger` — the executor and Task Execution API path | carried forward |
+| **Airflow scheduled execution** | `verify-airflow-scheduling` workflow | **success, 4/4 tasks** via `dags trigger` — the executor and Task Execution API path, on a clean GitHub runner rather than a developer machine. Whole workflow 5m28s | 2026-08-17 |
 | Whitespace | `git diff --check` | exit 0 | 2026-08-17 |
 | Secret scan | `git grep` over tracked files | 2 known-benign hits | carried forward |
 
@@ -282,6 +282,14 @@ Recorded so they do not cost it twice.
 - **The Airflow image bakes `src/`.** `dags/` is bind-mounted, so DAG edits apply
   immediately while library edits do not. `../src` is now mounted too; without that
   the two drift silently and only the DagBag test notices.
+- **Unpausing a DAG on a fresh metadata database schedules a run you did not ask
+  for.** A six-hourly DAG has a current interval, so unpausing creates it at once,
+  and that run takes the single slot in `warehouse_writer`. Anything triggered on
+  top waits. The scheduling gate spent twenty minutes at `queued` on its first CI
+  run and reported that the DAG had not executed — while the scheduler was busy
+  executing the other run perfectly. A developer machine cannot show this: a DAG
+  that has run for days has no missed interval to create. The gate now waits for the
+  DAG to be idle, and if it still times out it names the run holding the pool.
 - **`airflow dags test` is not evidence that anything can be scheduled.** It runs
   every task in-process, so it never touches the executor and never authenticates
   to the Task Execution API. Two settings were missing that made every scheduled
