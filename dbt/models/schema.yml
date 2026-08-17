@@ -307,3 +307,58 @@ models:
           - accepted_values:
               arguments:
                 values: ['pm25', 'pm10', 'no2', 'o3']
+
+  - name: fct_forecast_vs_analysis
+    description: >
+      Each forecast hour paired with the same model's own analysis of that hour,
+      at the same coordinate. The only term of the published model-station gap
+      that is about forecasting; the rest is spatial and instrumental. A drift
+      near 1.0 excludes the forecast as the explanation for that gap and says
+      nothing about accuracy, because the two sides are the same model twice.
+    columns:
+      - name: location_key
+        data_tests: [not_null]
+      - name: pollutant
+        data_tests: [not_null]
+      - name: valid_at_utc
+        data_tests: [not_null]
+      - name: forecast_concentration
+        data_tests: [not_null]
+      - name: analysis_concentration
+        description: >
+          Null until the analysis for that hour has been loaded. Deliberately not
+          not_null: the daily DAG loads a past UTC day at a time, so a forecast for
+          tomorrow has nothing to compare against yet, and pairing_status is what
+          distinguishes waiting from never.
+      - name: pairing_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['PAIRED', 'PENDING', 'UNPAIRABLE']
+      - name: lead_band
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['1-24h', '25-48h', '49-72h']
+
+  - name: mart_forecast_vs_analysis
+    description: >
+      Forecast drift by location, pollutant and lead band. Read beside
+      mart_model_station_discrepancy, never instead of it. Figures are NULL below
+      the paired-hour floor, matching that mart's convention so a reader learns
+      one meaning for an em dash rather than two.
+    columns:
+      - name: location_key
+        data_tests: [not_null]
+      - name: pollutant
+        data_tests: [not_null]
+      - name: paired_hours
+        data_tests: [not_null]
+      - name: lead_band
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['1-24h', '25-48h', '49-72h']

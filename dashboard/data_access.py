@@ -336,6 +336,35 @@ def load_coverage(
         return connection.execute(query, parameters).fetchdf()
 
 
+def load_forecast_vs_analysis(database_path: Path) -> pd.DataFrame:
+    """Return forecast drift against the model's own analysis, by lead band.
+
+    The companion to load_model_station_discrepancy and meaningless without it: this
+    is the part of the published gap that is about forecasting, and that mart is the
+    part that is not.
+    """
+
+    query = """
+        select
+            location_key,
+            pollutant,
+            lead_band,
+            unit,
+            paired_hours,
+            pending_hours,
+            has_sufficient_sample,
+            min_paired_hours,
+            mean_forecast_ugm3,
+            mean_analysis_ugm3,
+            mean_abs_drift_ugm3,
+            mean_signed_drift_ugm3
+        from analytics.mart_forecast_vs_analysis
+        order by location_key, pollutant, lead_band
+    """
+    with duckdb.connect(str(database_path), read_only=True) as connection:
+        return connection.execute(query).fetchdf()
+
+
 def load_model_station_discrepancy(database_path: Path) -> pd.DataFrame:
     """Return the model-versus-station gap by location, pollutant and lead band.
 

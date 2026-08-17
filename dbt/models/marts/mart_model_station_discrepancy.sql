@@ -16,11 +16,17 @@
 -- City PM2.5 sat at 1.13x. A four-fold systematic offset is what two instruments
 -- measuring different things looks like, not what a bad forecast looks like.
 --
--- So this model publishes the discrepancy honestly and stops there. Turning any of
--- it into a forecast-accuracy claim needs the representativeness half removed first
--- -- by comparing the model against itself at the station's own coordinates -- and
--- that work does not exist yet. Until it does, the UI keeps saying confidence, and
--- verify_streamlit.py keeps asserting that it does.
+-- So this model publishes the discrepancy honestly and stops there.
+--
+-- One of the two unknowns has since been removed. mart_forecast_vs_analysis compares
+-- the forecast with the same model's own analysis at the same coordinate, and measured
+-- on this warehouse that drift sits near 1.0 with no growth across lead bands while
+-- the ratio here is 4.7x and equally flat. So the gap below is not the forecast being
+-- wrong. What is still not separated is the remainder: how much of it is a province
+-- grid cell sitting somewhere other than the station, and how much is the model being
+-- offset even at the right place. That needs the model sampled at the station's own
+-- coordinates, and that work does not exist yet. Until it does, the UI keeps saying
+-- confidence, and verify_streamlit.py keeps asserting that it does.
 --
 -- Every figure carries its sample size, and the excluded hours are published rather
 -- than dropped, for the same reason withheld readings are quarantined instead of

@@ -232,6 +232,14 @@ PAGES: tuple[PageExpectation, ...] = (
             # never let their absence read as a good result.
             "Chênh lệch giữa mô hình và trạm quan trắc",
             "không phải là chính xác hơn, mà là chưa từng được đo",
+            # The forecast-versus-analysis term, and the trap it creates. A drift near
+            # 1.0 looks like good news and is not: the two sides are the same model
+            # twice, so it excludes the forecast as the explanation for the gap and
+            # establishes nothing about accuracy. Both halves are asserted, because
+            # publishing the exclusion without the caveat is the overclaim.
+            "Khoảng cách đó có phải do dự báo sai không",
+            "không có nghĩa dự báo chính xác",
+            "cùng một mô hình nói hai lần",
             "Quyết định 1459",
         ),
         forbidden_text=READER_FORBIDDEN_TEXT,

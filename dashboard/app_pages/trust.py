@@ -12,6 +12,7 @@ import streamlit as st
 from dashboard.components import methodology_expander, metric_row, source_registry
 from dashboard.runtime import (
     cached_current,
+    cached_forecast_vs_analysis,
     cached_model_station_discrepancy,
     cached_pipeline_runs,
     cached_relation_exists,
@@ -216,6 +217,80 @@ if not discrepancy.empty:
             "Chỉ hiện con số khi có tối thiểu "
             f"{int(discrepancy['min_paired_hours'].max())} giờ ghép được; dưới ngưỡng đó "
             "ô sẽ trống thay vì hiện một con số dựng từ vài giờ lẻ."
+        )
+
+# The other half of the gap above, and the reason it can now be attributed. Rendered
+# after the discrepancy table on purpose: a reader meets the 4.7x first and this
+# explains it, rather than meeting an explanation for something they have not seen.
+if cached_relation_exists(str(path), "mart_forecast_vs_analysis"):
+    drift = cached_forecast_vs_analysis(str(path))
+else:
+    drift = pd.DataFrame()
+
+if not drift.empty:
+    with st.container(border=True):
+        st.subheader("Khoảng cách đó có phải do dự báo sai không")
+        st.write(
+            "**Không.** Bảng dưới so dự báo với **phân tích của chính mô hình** cho "
+            "cùng giờ, tại **cùng một toạ độ** — nên câu hỏi không gian bị loại bỏ "
+            "hoàn toàn, và phần còn lại là phần duy nhất nói về việc dự báo. "
+            "Dự báo tái tạo lại phân tích của mô hình; khoảng cách tới trạm nằm ở chỗ khác."
+        )
+        # The trap this table creates, stated before the numbers rather than after.
+        st.warning(
+            "**Điều này không có nghĩa dự báo chính xác.** Dự báo và phân tích là cùng "
+            "một mô hình nói hai lần. Nếu mô hình đọc cao gấp 3,9 lần trạm tại điểm đó, "
+            "thì một dự báo trung thành cũng cao gấp 3,9 lần. Bảng này **loại trừ** dự "
+            "báo khỏi danh sách nguyên nhân, và không nói gì về việc con số nào đúng.",
+            icon=":material/warning:",
+        )
+        drift_view = drift[
+            [
+                "location_key",
+                "pollutant",
+                "lead_band",
+                "paired_hours",
+                "mean_forecast_ugm3",
+                "mean_analysis_ugm3",
+                "mean_abs_drift_ugm3",
+                "mean_signed_drift_ugm3",
+            ]
+        ]
+        st.dataframe(
+            drift_view,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "location_key": "Địa điểm",
+                "pollutant": "Chất",
+                "lead_band": "Lead time",
+                "paired_hours": st.column_config.NumberColumn("Số giờ ghép được"),
+                "mean_forecast_ugm3": st.column_config.NumberColumn("Dự báo TB", format="%.1f"),
+                "mean_analysis_ugm3": st.column_config.NumberColumn("Phân tích TB", format="%.1f"),
+                "mean_abs_drift_ugm3": st.column_config.NumberColumn(
+                    "Lệch tuyệt đối TB", format="%.1f"
+                ),
+                "mean_signed_drift_ugm3": st.column_config.NumberColumn(
+                    "Lệch có dấu TB", format="%.1f"
+                ),
+            },
+        )
+        st.caption(
+            "Cách đọc: kỹ năng dự báo thật **phải kém đi khi dự xa hơn**. Nếu độ lệch ở "
+            "đây phẳng qua cả ba mức lead time, và tỉ lệ mô hình–trạm ở bảng trên cũng "
+            "phẳng y như vậy, thì cái phẳng đó là lệch hệ thống giữa hai phép đo khác "
+            "nhau, không phải sai số dự báo."
+        )
+        st.caption(
+            "Ô trống nghĩa là chưa đủ số giờ ghép được để nói gì, không phải bằng 0. "
+            "Phân tích cũng đến sau như quan trắc: DAG daily nạp từng ngày UTC đã qua, "
+            "nên dự báo cho ngày mai chưa có gì để đối chiếu."
+        )
+        st.caption(
+            "Vẫn chưa tách được: trong khoảng cách mô hình–trạm còn lại, bao nhiêu là do "
+            "ô lưới tỉnh không nằm đúng chỗ trạm, và bao nhiêu là do mô hình lệch ngay "
+            "tại đúng vị trí đó. Việc đó cần lấy mô hình tại chính toạ độ trạm, và chưa "
+            "được dựng."
         )
 
 with st.container(border=True):

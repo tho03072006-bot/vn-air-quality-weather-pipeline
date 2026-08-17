@@ -14,6 +14,7 @@ from dashboard.data_access import (
     load_contiguous_windows,
     load_current_conditions,
     load_decision_windows,
+    load_forecast_vs_analysis,
     load_location_forecast,
     load_model_station_discrepancy,
     load_pipeline_health,
@@ -144,6 +145,11 @@ def cached_pipeline_runs(path: str) -> pd.DataFrame:
 @st.cache_data(ttl="15m", max_entries=4)
 def cached_model_station_discrepancy(path: str) -> pd.DataFrame:
     return load_model_station_discrepancy(Path(path))
+
+
+@st.cache_data(ttl="15m", max_entries=4)
+def cached_forecast_vs_analysis(path: str) -> pd.DataFrame:
+    return load_forecast_vs_analysis(Path(path))
 
 
 @st.cache_data(ttl="1h", max_entries=64, show_spinner=False)
