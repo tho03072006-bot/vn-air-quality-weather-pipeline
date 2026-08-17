@@ -10,7 +10,8 @@ from dashboard.runtime import (
     format_local_timestamp,
     require_warehouse,
 )
-from dashboard.view_models import build_metric
+from dashboard.view_models import build_metric, format_age
+from dashboard.warehouse_source import asset_status
 
 st.title("Pipeline health")
 st.caption("Freshness, volume và run audit lấy trực tiếp từ warehouse.")
@@ -18,6 +19,63 @@ st.caption("Freshness, volume và run audit lấy trực tiếp từ warehouse."
 path = require_warehouse("fct_pipeline_run")
 health = cached_pipeline_health(str(path))
 runs = cached_pipeline_runs(str(path))
+
+# Which file is being read, as opposed to how old the data inside it is. Everything
+# else on this page answers the second question; only this answers the first, and on
+# 2026-08-16 the difference between them was a two-and-a-half-hour blind spot.
+status = asset_status(path)
+_now = pd.Timestamp.now(tz="UTC")
+with st.container(border=True):
+    st.subheader("File warehouse đang được phục vụ")
+    if status.local_modified_utc is None:
+        st.warning(
+            "Không đọc được thời điểm ghi của file warehouse.",
+            icon=":material/help:",
+        )
+    else:
+        local_age = (_now - pd.Timestamp(status.local_modified_utc)).total_seconds() / 60
+        st.write(
+            f"Ghi lần cuối lúc **{format_local_timestamp(status.local_modified_utc)}** "
+            f"— {format_age(local_age)} trước."
+        )
+
+    if not status.url_configured:
+        st.caption(
+            "Không có `DEMO_WAREHOUSE_URL`, nên file này do máy local dựng và không có "
+            "asset nào để đối chiếu. Trên bản deploy, mốc trên là lúc container tải asset."
+        )
+    elif status.probe_failed:
+        st.caption(
+            "Không đọc được `Last-Modified` của asset đã publish, nên chưa so sánh được. "
+            "Đây là trạng thái chưa biết, không phải bằng chứng file đang mới."
+        )
+    else:
+        published_age = (_now - pd.Timestamp(status.published_modified_utc)).total_seconds() / 60
+        st.write(
+            "Asset đã publish sửa lần cuối "
+            f"**{format_local_timestamp(status.published_modified_utc)}** "
+            f"— {format_age(published_age)} trước."
+        )
+        if status.newer_asset_available:
+            st.warning(
+                "Đã có asset mới hơn file đang phục vụ. App chỉ tải asset khi thiếu file "
+                "local, nên tiến trình này sẽ giữ bản cũ cho tới khi container khởi động "
+                "lại. Dữ liệu hiển thị vẫn đúng với file, chỉ là không còn mới nhất.",
+                icon=":material/sync_problem:",
+            )
+        else:
+            st.success(
+                "File đang phục vụ không cũ hơn asset đã publish.",
+                icon=":material/check_circle:",
+            )
+
+    st.caption(
+        "Mốc này là tuổi của **file**, không phải tuổi của **dữ liệu**. Badge freshness "
+        "trên đầu trang đo vintage dự báo mới nhất bên trong warehouse. Hai con số trả "
+        "lời hai câu hỏi khác nhau, và khi chúng lệch nhau thì nguyên nhân cũng khác "
+        "nhau: dữ liệu cũ vì pipeline chậm, hay vì tiến trình này đang phục vụ một bản "
+        "tải cũ."
+    )
 
 if health.empty:
     st.warning("Chưa có health metrics.")

@@ -184,7 +184,16 @@ PAGES: tuple[PageExpectation, ...] = (
         title_contains="ipeline",
         # PARTIAL is the outcome worth surfacing: nothing errored, so nobody is
         # paged, yet the warehouse is incomplete.
-        required_text=("PARTIAL", "Raw tạo mới", "Run mới nhất"),
+        required_text=(
+            "PARTIAL",
+            "Raw tạo mới",
+            "Run mới nhất",
+            # File age and data age are different questions, and for one deployment
+            # the app could only answer the second. The page must keep answering
+            # both, and must keep saying they are not the same measurement.
+            "File warehouse đang được phục vụ",
+            "Badge freshness trên đầu trang đo vintage dự báo mới nhất",
+        ),
         min_dataframes=1,
     ),
     PageExpectation(
