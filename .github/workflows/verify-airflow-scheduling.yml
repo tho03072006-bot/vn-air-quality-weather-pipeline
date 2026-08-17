@@ -62,8 +62,15 @@ jobs:
       # cannot write the warehouse, and cannot write its own task log -- and an
       # unwritable log is indistinguishable from the execution-API failure this gate
       # exists to detect. Broad permissions are acceptable on a throwaway runner.
+      #
+      # dbt/ is in the list because dbt writes target/ and logs/ into its own project
+      # directory. The first run of this workflow omitted it and build_analytics died
+      # with `dbt build ... exit status 2` -- an unhandled exception rather than a
+      # model failure, which is what being unable to create a directory looks like.
+      # Whether that was the cause is settled by the task-log step below, not asserted
+      # here.
       - name: Make the bind mounts writable by the airflow user
-        run: chmod -R 777 data airflow/logs
+        run: chmod -R 777 data airflow/logs dbt
 
       - name: Provide the env file compose requires
         run: cp .env.example .env
@@ -94,11 +101,28 @@ jobs:
         shell: pwsh
         run: ./scripts/verify_airflow_scheduling.ps1 -TimeoutMinutes 20
 
-      # An empty task log is the signature of the failure this gate was built for, so
-      # the container logs are where the evidence actually lives.
+      # The task log is the primary evidence and the container log is the fallback.
+      # That order matters: an *empty* task log is itself the signature of the
+      # execution-API failure this gate exists to detect, and dbt's own output only
+      # ever reaches the task log. The first run of this workflow printed 200 lines of
+      # container output in which the api-server access log crowded out the one thing
+      # worth reading, so the task logs come first and uncropped.
+      - name: Task logs
+        if: failure()
+        run: |
+          echo "::group::task logs"
+          find airflow/logs -name '*.log' -print -exec tail -n 120 {} \; || echo "no task logs written"
+          echo "::endgroup::"
+
       - name: Container logs
         if: failure()
-        run: docker compose -f airflow/docker-compose.yml logs --tail 200
+        run: |
+          echo "::group::scheduler"
+          docker compose -f airflow/docker-compose.yml logs --tail 300 airflow-scheduler
+          echo "::endgroup::"
+          echo "::group::dag-processor"
+          docker compose -f airflow/docker-compose.yml logs --tail 100 airflow-dag-processor
+          echo "::endgroup::"
 
       - name: Tear down
         if: always()

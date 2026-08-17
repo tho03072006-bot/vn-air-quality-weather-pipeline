@@ -96,6 +96,31 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Could not unpause $DagId" }
     }
 
+    # ---- 2b. Wait for the DAG to be idle before triggering.
+    #
+    # Unpausing a six-hourly DAG on a metadata database that has never seen it makes
+    # the scheduler create the current interval's run immediately. That run takes the
+    # single slot in the warehouse_writer pool, and warehouse_writer having exactly
+    # one slot is a correctness invariant (finding D), not a tunable. A run triggered
+    # on top of it therefore sits in 'queued' until the first one finishes.
+    #
+    # Measured on a GitHub runner before this wait existed: the triggered run stayed
+    # queued for the full twenty minutes while a scheduled run executed beside it, and
+    # the gate reported that the DAG had not executed. It had. That is a check
+    # reporting the wrong cause, which is worse than a check that simply fails, so the
+    # collision is now waited out rather than misread. A developer's machine never
+    # showed it because a DAG that has been running for days has no missed interval to
+    # backfill.
+    $idleDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while ((Get-Date) -lt $idleDeadline) {
+        $existing = ConvertFrom-AirflowJson (Invoke-Airflow @('dags', 'list-runs', $DagId, '--output', 'json'))
+        $busy = @($existing | Where-Object { $_.state -eq 'queued' -or $_.state -eq 'running' })
+        if ($busy.Count -eq 0) { break }
+        Write-Host ("  waiting for {0} in-flight run(s) to finish: {1}" -f
+            $busy.Count, (($busy | ForEach-Object { "$($_.run_id)=$($_.state)" }) -join ', ')) -ForegroundColor DarkGray
+        Start-Sleep -Seconds $PollSeconds
+    }
+
     # ---- 3. Trigger a run with an id we chose, so polling cannot match somebody
     # ---- else's run and report a stale success.
     $runId = "verify_scheduling__{0}" -f ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
@@ -135,6 +160,18 @@ try {
         # Reaching the deadline in a non-terminal state is a failure of this gate,
         # not an inconclusive result -- the DAG did not execute.
         Write-Host "FAIL: $DagId run $runId was still '$state' after $TimeoutMinutes minute(s)." -ForegroundColor Red
+        # Say what else was happening before blaming the execution API. A run stuck at
+        # 'queued' while another run holds the single warehouse_writer slot is a
+        # scheduler doing its job, and reporting that as a scheduling failure sends
+        # the reader hunting for a fault that is not there.
+        $others = ConvertFrom-AirflowJson (Invoke-Airflow @('dags', 'list-runs', $DagId, '--output', 'json'))
+        $blocking = @($others | Where-Object { $_.run_id -ne $runId -and ($_.state -eq 'queued' -or $_.state -eq 'running') })
+        if ($blocking.Count -gt 0) {
+            Write-Host "" -ForegroundColor Red
+            Write-Host "Another run was in flight and holds the single warehouse_writer slot:" -ForegroundColor Red
+            $blocking | ForEach-Object { Write-Host "  $($_.run_id) = $($_.state)" -ForegroundColor Red }
+            Write-Host "The scheduler was working; this run was waiting for the pool." -ForegroundColor Red
+        }
     }
     Write-Host "Task states:" -ForegroundColor Red
     Invoke-Airflow @('tasks', 'states-for-dag-run', $DagId, $runId) | Out-String | Write-Host
