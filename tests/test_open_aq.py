@@ -89,3 +89,85 @@ def test_normalizes_sensor_hours() -> None:
     assert records[0].value == 15.1
     assert records[0].observed_at_utc == datetime(2026, 7, 27, tzinfo=UTC)
     assert records[0].source_type == "observed"
+
+
+def _locations_payload(coordinates: object) -> dict[str, object]:
+    return {
+        "results": [
+            {
+                "id": 7,
+                "name": "somewhere",
+                "datetimeLast": {"utc": "2026-07-27T23:00:00Z"},
+                "coordinates": coordinates,
+                "sensors": [{"id": 70, "parameter": {"name": "pm25"}}],
+            }
+        ]
+    }
+
+
+def test_station_coordinates_are_captured() -> None:
+    """The position is the whole point of capturing this payload again.
+
+    Without it there is nowhere to sample the model at, and the representativeness
+    half of finding O cannot be separated from the model's own offset.
+    """
+
+    selected = select_city_sensors(
+        "hanoi", _locations_payload({"latitude": 21.0458, "longitude": 105.8202})
+    )
+
+    assert selected["pm25"].latitude == 21.0458
+    assert selected["pm25"].longitude == 105.8202
+
+
+def test_a_station_without_coordinates_still_reports() -> None:
+    """Dropping the sensor would trade real observations for a tidy column.
+
+    A location with no coordinates is a payload OpenAQ genuinely returns. The
+    measurement is still valid; only the model comparison is unavailable, and that is
+    reported downstream as an absent comparison rather than as a zero.
+    """
+
+    selected = select_city_sensors("hanoi", _locations_payload(None))
+
+    assert selected["pm25"].sensor_id == 70
+    assert selected["pm25"].latitude is None
+    assert selected["pm25"].longitude is None
+
+
+def test_malformed_coordinates_are_treated_as_absent() -> None:
+    """Half a coordinate is not a position, and a string is not a number.
+
+    Both shapes have to collapse to the same "unknown" rather than raising or, worse,
+    producing a partial position that a downstream query would happily sample at.
+    """
+
+    half = select_city_sensors("hanoi", _locations_payload({"latitude": 21.0}))
+    text = select_city_sensors(
+        "hanoi", _locations_payload({"latitude": "north", "longitude": "east"})
+    )
+
+    assert (half["pm25"].latitude, half["pm25"].longitude) == (None, None)
+    assert (text["pm25"].latitude, text["pm25"].longitude) == (None, None)
+
+
+def test_coordinates_travel_onto_every_measurement() -> None:
+    """The station dimension is built from measurement rows, so a coordinate that
+    stops at the selection never reaches the warehouse at all."""
+
+    selection = SensorSelection("hanoi", "2", "station", 20, "pm25", 21.0458, 105.8202)
+    payload = {
+        "results": [
+            {
+                "value": 15.1,
+                "flagInfo": {"hasFlags": False},
+                "parameter": {"name": "pm25", "units": "µg/m³"},
+                "period": {"datetimeFrom": {"utc": "2026-07-27T00:00:00Z"}},
+            }
+        ]
+    }
+
+    record = normalize_sensor_hours(selection, payload)[0]
+
+    assert record.station_latitude == 21.0458
+    assert record.station_longitude == 105.8202

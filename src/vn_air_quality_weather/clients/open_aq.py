@@ -20,6 +20,20 @@ class SensorSelection:
     station_name: str
     sensor_id: int
     pollutant: str
+    # Where the station actually is. OpenAQ returns this on every location and this
+    # class discarded it for the project's whole life, so the only record of a
+    # station's position was the raw archive nobody queried.
+    #
+    # It is the missing half of finding O. The published model-station gap contains a
+    # spatial term -- a province grid cell is not a street corner -- and separating
+    # that term from the model's own bias requires sampling the model at the station's
+    # coordinates. Without these two numbers in the warehouse there is nothing to
+    # sample at.
+    #
+    # Optional because a location without coordinates is a real payload OpenAQ can
+    # return, and dropping the sensor over it would trade observations for tidiness.
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class OpenAQClient:
@@ -157,15 +171,36 @@ def select_city_sensors(
             sensor_id = sensor.get("id")
             if pollutant not in pollutants or pollutant in selected or sensor_id is None:
                 continue
+            latitude, longitude = _coordinates(location)
             selected[pollutant] = SensorSelection(
                 city_key=city_key,
                 station_id=str(station_id),
                 station_name=station_name,
                 sensor_id=int(sensor_id),
                 pollutant=pollutant,
+                latitude=latitude,
+                longitude=longitude,
             )
 
     return selected
+
+
+def _coordinates(location: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    """Read a location's position, tolerating every shape that is not two numbers.
+
+    Returns a pair of Nones rather than raising. A station whose coordinates are
+    missing or malformed is still a station reporting real measurements, and refusing
+    its observations would cost data to protect a column that only one downstream
+    model needs.
+    """
+
+    coordinates = location.get("coordinates")
+    if not isinstance(coordinates, Mapping):
+        return None, None
+    try:
+        return float(coordinates["latitude"]), float(coordinates["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
 
 
 def normalize_sensor_hours(
@@ -203,6 +238,8 @@ def normalize_sensor_hours(
                 flagged=bool(
                     flag_info.get("hasFlags", False) if isinstance(flag_info, Mapping) else False
                 ),
+                station_latitude=selection.latitude,
+                station_longitude=selection.longitude,
             )
         )
     return records

@@ -39,9 +39,21 @@ CONTIGUOUS_WORST_HOUR_ANCHOR_INDEX = 3
 CONTIGUOUS_WORST_HOUR_LEAD_HOUR = 6
 CONTIGUOUS_WORST_HOUR_PM25 = 80.0
 FORECAST_VINTAGE_GAP_HOURS = 6
+# Station id, name, sensors, and an offset in degrees from the city anchor.
+#
+# The offset is the point of the fixture, not decoration. A station that sat exactly
+# on the anchor would make the representativeness term identically zero, and a
+# decomposition whose spatial half is always zero cannot be told apart from one that
+# forgot to compute it. Roughly two kilometres, which is the order of a real
+# anchor-to-station distance and small enough to stay inside the same province.
 OBSERVED_STATIONS = {
-    "hanoi": ("1001", "Demo Hanoi station", {"pm25": 2001, "pm10": 2002, "o3": 2003}),
-    "ho_chi_minh": ("1002", "Demo HCMC station", {"pm25": 2004}),
+    "hanoi": (
+        "1001",
+        "Demo Hanoi station",
+        {"pm25": 2001, "pm10": 2002, "o3": 2003},
+        (0.018, -0.014),
+    ),
+    "ho_chi_minh": ("1002", "Demo HCMC station", {"pm25": 2004}, (-0.021, 0.011)),
 }
 # A second Hanoi station reporting a suspect PM2.5 value for one hour each day.
 # It gives that city/hour grain both a flagged and an unflagged reading, which is
@@ -49,7 +61,7 @@ OBSERVED_STATIONS = {
 # The all-flagged hours produced by FLAGGED_HOUR below merely make a grain vanish,
 # so on their own they cannot tell a mart that excludes flagged readings apart
 # from one that averages them in.
-CO_LOCATED_STATION = ("1003", "Demo Hanoi roadside station", 2005)
+CO_LOCATED_STATION = ("1003", "Demo Hanoi roadside station", 2005, (0.006, 0.009))
 CO_LOCATED_CITY_KEY = "hanoi"
 CO_LOCATED_FLAGGED_HOUR = 10
 FLAGGED_HOUR = 23
@@ -141,7 +153,7 @@ def build_demo(
                 )
 
                 if city.key == CO_LOCATED_CITY_KEY and hour == CO_LOCATED_FLAGGED_HOUR:
-                    co_station_id, co_station_name, co_sensor_id = CO_LOCATED_STATION
+                    co_station_id, co_station_name, co_sensor_id, co_offset = CO_LOCATED_STATION
                     observed.append(
                         ObservedAirQualityHourly(
                             city_key=city.key,
@@ -156,13 +168,17 @@ def build_demo(
                             observed_at_utc=timestamp,
                             value=round(pm25 * 6.0, 2),
                             flagged=True,
+                            station_latitude=round(city.latitude + co_offset[0], 6),
+                            station_longitude=round(city.longitude + co_offset[1], 6),
                         )
                     )
 
                 station = OBSERVED_STATIONS.get(city.key)
                 if station is None:
                     continue
-                station_id, station_name, sensors = station
+                station_id, station_name, sensors, offset = station
+                station_latitude = round(city.latitude + offset[0], 6)
+                station_longitude = round(city.longitude + offset[1], 6)
                 for pollutant, sensor_id in sensors.items():
                     # A deliberate gap so the Nowcast spine has a hole to handle.
                     if pollutant == "pm25" and hour in {3, 4}:
@@ -178,6 +194,8 @@ def build_demo(
                             observed_at_utc=timestamp,
                             value=_observed_value(pollutant, pm25, hour),
                             flagged=hour == FLAGGED_HOUR,
+                            station_latitude=station_latitude,
+                            station_longitude=station_longitude,
                         )
                     )
 
@@ -192,7 +210,7 @@ def build_demo(
         # Per city: weather, CAMS and an OpenAQ locations call, plus one
         # sensor-hours call for each observed sensor.
         raw_objects = len(CITIES) * 3 + sum(
-            len(sensors) for _, _, sensors in OBSERVED_STATIONS.values()
+            len(sensors) for _, _, sensors, _ in OBSERVED_STATIONS.values()
         )
         # A synthetic reuse count, not a simulation of real behaviour: a real manual
         # replay reports zero reused, because the raw object key embeds the run_id.

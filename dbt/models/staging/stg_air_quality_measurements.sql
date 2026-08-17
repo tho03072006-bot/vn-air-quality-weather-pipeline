@@ -15,6 +15,12 @@ with renamed as (
         cast(observed_at_utc as timestamptz) as observed_at_utc,
         cast(value as double) as concentration,
         coalesce(cast(flagged as boolean), false) as flagged,
+        -- Nullable, and not only because OpenAQ can omit them. Rows ingested before
+        -- these columns existed carry nulls permanently, and backfilling them would
+        -- mean rewriting immutable raw history to look like something it was not.
+        -- Downstream reports the absence instead.
+        try_cast(station_latitude as double) as station_latitude,
+        try_cast(station_longitude as double) as station_longitude,
         cast(source_name as varchar) as source_name,
         cast(source_type as varchar) as source_type
     from {{ source('raw', 'air_quality_hourly') }}
@@ -37,6 +43,8 @@ select
     observed_at_utc,
     concentration,
     flagged,
+    station_latitude,
+    station_longitude,
     source_name,
     source_type
 from renamed

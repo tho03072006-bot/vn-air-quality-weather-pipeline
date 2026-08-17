@@ -41,6 +41,17 @@ class ObservedAirQualityHourly:
     observed_at_utc: datetime
     value: float
     flagged: bool
+    # The station's own position, carried on every row rather than kept in a separate
+    # registry. Denormalised on purpose: these rows are the only place a station's
+    # coordinates reach the warehouse, and a dimension built from them stays correct
+    # even when a station moves, because the rows before and after the move each carry
+    # where they were measured.
+    #
+    # Nullable because OpenAQ can return a location without coordinates. A null here
+    # means the model cannot be sampled at that station, which the decomposition
+    # reports as an absent comparison rather than as a zero.
+    station_latitude: float | None = None
+    station_longitude: float | None = None
     source_name: str = "openaq"
     source_type: str = "observed"
 
