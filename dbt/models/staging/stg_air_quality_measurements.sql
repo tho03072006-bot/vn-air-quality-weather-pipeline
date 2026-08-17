@@ -4,6 +4,29 @@
 -- Bang 2 breakpoints are only defined in that unit. OpenAQ v3 reports some
 -- gaseous sensors in ppm or ppb, which would otherwise be scored against the
 -- wrong scale and read as clean air.
+--
+-- The two station-position columns are selected conditionally, and that is not
+-- defensive styling. They were added to the ingestion in b191358, so any warehouse
+-- written before it has no such column -- including the published release asset the
+-- refresh workflow rebuilds every six hours. Referencing a column that does not exist
+-- while aliasing to the same name made DuckDB resolve the reference to the alias
+-- itself, and the workflow failed with
+--
+--   Binder Error: Column "station_latitude" referenced that exists in the SELECT
+--   clause - but this column cannot be referenced before it is defined
+--
+-- which names neither the missing column nor the schema that is missing it. Local
+-- runs stayed green throughout because the fixture is regenerated and always has the
+-- column. Any staging model reading immutable raw history has to tolerate the schema
+-- that history was written with; a null here means "ingested before positions were
+-- captured", which is exactly what downstream already reports.
+{% set raw_air_quality = source('raw', 'air_quality_hourly') %}
+{% set raw_columns = [] %}
+{% if execute %}
+    {% set raw_columns = adapter.get_columns_in_relation(raw_air_quality)
+        | map(attribute='name') | map('lower') | list %}
+{% endif %}
+
 with renamed as (
     select
         cast(city_key as varchar) as city_key,
@@ -19,11 +42,19 @@ with renamed as (
         -- these columns existed carry nulls permanently, and backfilling them would
         -- mean rewriting immutable raw history to look like something it was not.
         -- Downstream reports the absence instead.
+        {% if 'station_latitude' in raw_columns %}
         try_cast(station_latitude as double) as station_latitude,
+        {% else %}
+        cast(null as double) as station_latitude,
+        {% endif %}
+        {% if 'station_longitude' in raw_columns %}
         try_cast(station_longitude as double) as station_longitude,
+        {% else %}
+        cast(null as double) as station_longitude,
+        {% endif %}
         cast(source_name as varchar) as source_name,
         cast(source_type as varchar) as source_type
-    from {{ source('raw', 'air_quality_hourly') }}
+    from {{ raw_air_quality }}
 )
 
 select
