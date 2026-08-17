@@ -63,7 +63,11 @@ try {
     Invoke-Gate 'ruff check' { & $Python -m ruff check . }
     Invoke-Gate 'pytest' { & $Python -m pytest }
     Invoke-Gate 'compileall' {
-        & $Python -m compileall -q src dashboard airflow/dags scripts
+        # Every top-level package, and `api` belongs in the same breath as the others.
+        # The list here and the one in ci.yml are two copies of one fact; adding a
+        # package to one and not the other is how this project has already broken CI
+        # once, so change them together.
+        & $Python -m compileall -q src dashboard api airflow/dags scripts
     }
 
     if (-not $SkipDbt) {

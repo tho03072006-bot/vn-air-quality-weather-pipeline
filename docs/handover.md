@@ -18,27 +18,41 @@ cannot support.
 
 ## 2. Verified state
 
-Every figure below was measured at handover, not estimated.
+Every figure below was measured, not estimated. The **Measured** column says when,
+because a number carried forward from an earlier session and a number taken just now
+are different kinds of claim, and this project has twice shipped a statement that was
+true when written and false when read.
 
-| Gate | Command | Result |
-|---|---|---|
-| Format | `ruff format --check .` | 88 files clean |
-| Lint | `ruff check .` | pass |
-| Unit tests | `pytest` | **313 passed, 1 skipped**, coverage 89.76% |
-| Contrast | `python scripts/verify_a11y.py` | **18/18** (9 pages x 2 viewports) |
-| Keyboard | `python scripts/verify_keyboard.py` | **0 findings**; 2.1.1, 2.4.7 and 2.4.3 all enforced |
-| dbt | `dbt build` | **PASS=130, ERROR=0** |
-| Source freshness | `dbt source freshness` | pass |
-| Dashboard | `python scripts/verify_streamlit.py` | **16/16** (9 fresh pages + interactions + 6 exhausted pages) |
-| Layout | `python scripts/verify_layout.py` | **18/18** (9 pages x 2 viewports) |
-| Byte-compile | `compileall src dashboard airflow/dags scripts` | exit 0 |
-| Compose | `docker compose -f airflow/docker-compose.yml config` | exit 0 |
-| Airflow DagBag | `airflow dags list-import-errors` | **0 import errors**, both DAGs registered and paused |
-| Airflow pool | `airflow pools list` | `warehouse_writer` present, **1 slot** |
-| Airflow task code | `airflow dags test vn_air_quality_weather_forecast` | success, 4/4 tasks, 36.8s, 34/34 locations, dbt PASS=129. **In-process — this does not exercise the scheduler**, see the row below and finding M |
-| **Airflow scheduled execution** | `.\scripts\verify_airflow_scheduling.ps1` | **success, 4/4 tasks, 32s** via `dags trigger` — the executor and Task Execution API path |
-| Whitespace | `git diff --check` | exit 0 |
-| Secret scan | `git grep` over tracked files | 2 known-benign hits |
+| Gate | Command | Result | Measured |
+|---|---|---|---|
+| Format | `ruff format --check .` | 95 files clean | 2026-08-17 |
+| Lint | `ruff check .` | pass | 2026-08-17 |
+| Unit tests | `pytest` | **330 passed, 1 skipped**, coverage 89.76% | 2026-08-17 |
+| dbt | `dbt build` | **PASS=145, ERROR=0** | 2026-08-17 |
+| Source freshness | `dbt source freshness` | pass | 2026-08-17 |
+| Dashboard | `python scripts/verify_streamlit.py` | **32/32** — 9 fresh pages + interactions + 6 exhausted + 16 on an unreadable warehouse | 2026-08-17 |
+| Layout | `verify_layout.py --skip-live-api` | **16/16** (8 pages x 2 viewports) | 2026-08-17 |
+| Contrast | `verify_a11y.py --skip-live-api` | **16/16** (8 pages x 2 viewports) | 2026-08-17 |
+| Keyboard | `verify_keyboard.py --skip-live-api` | **16/16**; 2.1.1, 2.4.7 and 2.4.3 enforced | 2026-08-17 |
+| **Deployed app** | `python scripts/verify_live_app.py` | **9/9 pages** render their own heading, none raised | 2026-08-17 |
+| Byte-compile | `compileall src dashboard api airflow/dags scripts` | exit 0 | 2026-08-17 |
+| Compose | `docker compose -f airflow/docker-compose.yml config` | exit 0 | carried forward |
+| Airflow DagBag | `airflow dags list-import-errors` | **0 import errors**, both DAGs registered | carried forward |
+| Airflow pool | `airflow pools list` | `warehouse_writer` present, **1 slot** | carried forward |
+| Airflow task code | `airflow dags test vn_air_quality_weather_forecast` | success, 4/4 tasks, 36.8s, 34/34 locations. **In-process — this does not exercise the scheduler**, see the row below and finding M | carried forward |
+| **Airflow scheduled execution** | `.\scripts\verify_airflow_scheduling.ps1` | **success, 4/4 tasks, 32s** via `dags trigger` — the executor and Task Execution API path | carried forward |
+| Whitespace | `git diff --check` | exit 0 | 2026-08-17 |
+| Secret scan | `git grep` over tracked files | 2 known-benign hits | carried forward |
+
+The three browser gates were run with `--skip-live-api`, which drops the
+custom-location page because its driver enters coordinates and calls the live
+forecast API. Eight gated pages, not nine; that page remains a manual check. The
+earlier 18/18 figures in this table's history were taken without the flag and are
+not comparable.
+
+The Airflow rows are carried forward from the session that measured them. The stack
+was not brought up again here, so treat them as last-known-good rather than as
+current.
 
 `.env` is not tracked; only `.env.example` is. The two secret-scan hits are the
 deliberate fake `apikey=super-secret` in `tests/test_forecast_run.py`, which exists
@@ -59,6 +73,12 @@ python -m pip install --upgrade --editable ".[dev,etl]"
 `etl` is required even for pytest: the suite imports `forecast_pipeline`,
 `pipeline` and `duckdb_loader`, whose import chains need boto3 and dlt. Use a base
 install with no extras only for the read-only dashboard runtime.
+
+Add `api` to work on the read API — `".[dev,etl,api]"`, which is what CI installs.
+Without it `tests/test_api.py` skips itself rather than failing, which keeps a
+dev-only install green and would make those tests silently never run if CI omitted
+the extra. Add `qa` for the browser gates, plus `python -m playwright install
+chromium`.
 
 Everything offline, in one command — no API call, no AWS call:
 
@@ -166,16 +186,43 @@ remain unverified by eye.
 [ui-design-spec.md](ui-design-spec.md) exclude browser paint, WebGL setup for the
 map, and client-side Altair rendering.
 
-**No accuracy figure exists.** Confidence is derived from lead time, completeness
-and vintage alignment. There is no verification fact, so no MAE, RMSE or bias is
-published anywhere, and `verify_streamlit.py` asserts the Trust page keeps saying
+**No accuracy figure is published, and a verification fact now exists.** Those are
+two separate statements and the distinction is the whole of finding O.
+`fct_forecast_verification` pairs each forecast hour with the observation that later
+validated it, and `mart_model_station_discrepancy` publishes the resulting gap on the
+Trust page. That gap is **not** forecast accuracy: it compares a CAMS grid cell with
+one street-level station, so it mixes model error with representativeness error, and
+nothing yet separates the two. Confidence remains derived from lead time,
+completeness and vintage alignment. No MAE, RMSE or bias is published anywhere, in
+the UI or over the API, and `verify_streamlit.py` asserts the Trust page keeps saying
 so.
+
+This paragraph previously read "there is no verification fact", which stopped being
+true the moment one was built. See findings O and P.
 
 **Alerts do not send anything.** The evaluation engine works; there is no delivery
 and no persistence. The page states this.
 
-**This is not production-ready.** Deployment, security, backup and observability
-have not been addressed.
+**The deployment can serve stale code, and now says so out loud.** On 2026-08-16 the
+published app answered readers with an `ImportError` on two of nine pages for two and
+a half hours while every gate above was green. Streamlit Community Cloud had failed
+to pull the new commit eight consecutive times, reporting it only in a log, so the
+container kept serving a checkout whose `dashboard/runtime.py` predated the symbols
+the newer page modules import. A person found it by opening the app.
+`scripts/verify_live_app.py` and the hourly `verify-live-app` workflow now watch the
+deployment from outside; a reboot is still the remedy, and there is no API to
+automate one.
+
+**The deployment can also serve a stale warehouse.** `ensure_local_warehouse` returns
+early whenever the file exists and a Community Cloud container keeps its disk, so a
+container downloads the asset once and serves that copy until it is replaced, while
+CI publishes a fresh one every six hours. Pipeline health now shows the served file's
+age next to the published asset's, which makes the divergence visible; nothing
+reloads automatically, and that was a decision rather than an omission.
+
+**This is not production-ready.** Security, backup and observability have not been
+addressed. The read API has no authentication, no rate limiting and no deployment
+target; it runs locally against a warehouse and is not exposed anywhere.
 
 ## 6. Traps that cost time here
 
@@ -184,6 +231,29 @@ Recorded so they do not cost it twice.
 - **Streamlit caches imported modules.** Editing a library module and reloading the
   page shows the old code, and can show an `ImportError` for something that exists.
   Restart the server before believing a browser result.
+- **Streamlit Community Cloud can fail to pull, and only whisper about it.** Eight
+  consecutive `Updating the app files has failed: exit status 1` lines over two and a
+  half hours, with no signal anywhere except the log behind **Manage app**. The
+  container stays on the commit it cloned and serves it happily. Two independent
+  tells: the redacted `ImportError` named a symbol that exists on `main`, and the
+  dependency list in the boot log contained `dbt-core` and `dlt`, which a
+  `pyproject.toml` from before `67ae666` installs and a later one does not. When the
+  deployed app disagrees with `main`, read the boot log's install list before
+  theorising — it dates the checkout.
+- **A green offline gate says nothing about the deployment.** Every check in this
+  repository proved something about code on a machine we control. None of them looked
+  at the published app until `verify_live_app.py` existed. An HTTP 200 would not have
+  helped either: Streamlit answers 200 with a shell document before any app code
+  runs, so `curl` reports health while every page inside is failing.
+- **FastAPI resolves string annotations against module globals.** With
+  `from __future__ import annotations`, an `Annotated[..., Depends(...)]` alias
+  defined inside an app factory is invisible to FastAPI: it cannot see the `Depends`,
+  silently reclassifies the parameter as a query string, and every route answers 422
+  instead of running. The alias must be at module scope.
+- **A promise-checking test can fire on the promise.** The first version of the
+  API's no-accuracy test swept the serialised payload for `mae` and failed on the
+  disclosure sentence saying there is no MAE. Assert on field names, not on prose
+  that quotes the thing being forbidden.
 - **The Airflow image bakes `src/`.** `dags/` is bind-mounted, so DAG edits apply
   immediately while library edits do not. `../src` is now mounted too; without that
   the two drift silently and only the DagBag test notices.
@@ -235,16 +305,24 @@ Recorded so they do not cost it twice.
 
 In order:
 
-1. [implementation-roadmap.md](implementation-roadmap.md) Phase 6 — the production
-   roadmap, with a table of what must be decided before each item can be built
-   honestly. Items 3–5 there are the only route to publishing an accuracy figure.
-2. Extend state coverage where it is still thin. The exhausted/stale state is now
-   measured by the second warehouse branch in `verify_streamlit.py`; empty and error
-   states remain unmeasured, and `verify_layout.py` still does not cover a tablet
-   width.
-3. Accessibility remains the largest unverified area: contrast ratios and typography
-   have never been checked, by eye or by measurement. Both are measurable from the
-   DOM the same way the layout checks are, so this is now a smaller job than it was.
+1. **Separate the two error terms in finding O.** Compare the model with itself at a
+   station's exact coordinates instead of comparing the province anchor with the
+   station. Until that exists, no accuracy figure can be published honestly, and
+   roadmap items 4 and 5 are blocked rather than pending. This is the largest open
+   item and the only one that changes what the product may claim.
+2. **Decide whether the deployment should reload its warehouse.** Pipeline health now
+   shows that the served file and the published asset can diverge; nothing acts on it.
+   The options and the constraints that must hold — `read_only=True`, atomic writes,
+   and the load-bearing filename — are in the register under finding N's neighbours.
+3. Single-source the duplicated promises. Finding P records the pattern: the same
+   claim lives in `methodology.py` and in Trust's own container, and the gate now
+   locks both copies without merging them.
+4. Thin spots that remain in the gates: `verify_layout.py` covers no tablet width,
+   the browser gates skip the custom-location page whenever `--skip-live-api` is set,
+   and typography has never been checked by eye or by measurement.
+
+Empty and error states are no longer on this list: `verify_streamlit.py` now drives
+every warehouse-reading page against an absent warehouse and an empty one.
 
 Open findings and their status are in
 [code-audit-and-risk-register.md](code-audit-and-risk-register.md).

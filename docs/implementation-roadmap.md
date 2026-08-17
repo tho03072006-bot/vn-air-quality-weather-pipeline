@@ -397,15 +397,30 @@ not verified.
 
 ## Phase 6 — Production roadmap (deliberately not implemented)
 
-This phase is a plan, not code. Writing any of it now would mean guessing at
-decisions that need data the project does not yet have — most obviously, five of
-the eleven items below depend on a verification fact that does not exist, and
-three depend on a user-identity model the project has never had.
+This phase is mostly a plan rather than code. Two of its items have since been
+built, and one of those changed what the rest of the phase means.
 
-**The gate that matters most.** Items 3–5 are the only route to publishing any
-error figure. Until they exist the UI says *confidence* and never *accuracy*, and
-`verify_streamlit.py` asserts the Trust page keeps saying so. That assertion is
-the mechanism that stops this rule eroding quietly.
+**Item 3 exists. Item 4 is blocked, not pending — and the difference is the point.**
+`fct_forecast_verification` pairs each forecast hour with the observation that later
+validated it, and `mart_model_station_discrepancy` publishes the gap. That gap is not
+forecast error: it compares a CAMS grid cell with one street-level station, so model
+error and representativeness error arrive added together, and the measured 4.7x ratio
+holds flat across all three lead bands — which is the signature of a systematic
+offset rather than of forecast skill, since real skill degrades with lead time.
+Building MAE on top of that would publish a representativeness artefact as accuracy.
+Finding O has the numbers.
+
+What unblocks item 4 is not more data but a different comparison: sample the model at
+a station's own coordinates and compare it with the model at the province anchor,
+which separates the two error terms instead of summing them. That is now the largest
+open item in the project.
+
+**The gate that matters most.** Until that separation exists the UI says *confidence*
+and never *accuracy*, and `verify_streamlit.py` asserts the Trust page keeps saying
+so. The read API repeats the same promise in every response payload and does not
+expose the discrepancy mart at all. Those assertions are the mechanism that stops the
+rule eroding quietly — and finding P records the one time it eroded anyway, when the
+claim was written in two places and corrected in one.
 
 **Sequencing rationale.** Item 1 comes first because every honest statement about
 observed coverage depends on knowing which station produced a reading and under
@@ -421,17 +436,21 @@ be done sooner if user-facing value matters more than measurement.
 
 
 
-Dependency-ordered. Items 3–5 are the only route to publishing any accuracy
+Dependency-ordered. Items 4–5 remain the only route to publishing any accuracy
 figure; until they exist the UI says confidence.
 
 1. Station / provider / license dimension.
 2. Observed-recent → observed-delayed → modeled fallback with per-row source
    label.
-3. Forecast verification fact: each vintage joined to the observation that
-   later validated it.
-4. MAE / RMSE / bias by location, pollutant and lead hour.
+3. ~~Forecast verification fact: each vintage joined to the observation that
+   later validated it.~~ **Built** (`de0186e`). It does not unlock item 4; see above.
+4. MAE / RMSE / bias by location, pollutant and lead hour. **Blocked** on separating
+   model error from representativeness error, which needs the model sampled at
+   station coordinates rather than at the province anchor.
 5. Empirical confidence replacing the lead-time heuristic.
-6. Contiguous 2h / 3h outdoor windows (closes UI gap G7).
+6. ~~Contiguous 2h / 3h outdoor windows (closes UI gap G7).~~ **Built** (`6de2136`):
+   2h and 3h blocks of adjacent hours, scored by the worst hour, broken by any hour
+   without data.
 7. Activity profile and sensitive-group preference.
 8. Saved locations.
 9. Alert delivery with history and status (closes G8).
@@ -447,9 +466,9 @@ can be built honestly, rather than guessed at:
 
 | Item | What has to be decided or obtained first |
 |---|---|
-| 1 | OpenAQ licence terms per provider, and whether station metadata may be redistributed |
-| 3 | How long to wait before an observation counts as validating a forecast hour, and what to do when no observation ever arrives |
-| 4 | Minimum paired sample size before an error figure may be shown at all — publishing MAE from a week of data would be its own false claim |
+| 1 | OpenAQ licence terms per provider, and whether station metadata may be redistributed. Still open, and now disclosed rather than assumed: every source in `sources.py` is registered `UNVERIFIED` and the Trust page renders that state to readers |
+| 3 | ~~How long to wait before an observation counts as validating a forecast hour~~ — settled at a single 168-hour threshold. A second 48-hour threshold was designed and dropped because it classified no row differently; the reasoning is in the model file |
+| 4 | Two things, not one. **(a)** Separate model error from representativeness error, which needs the model sampled at station coordinates — without it any MAE is a representativeness artefact wearing an accuracy label. **(b)** Minimum paired sample size before an error figure may be shown at all; publishing MAE from a week of data would be its own false claim |
 | 5 | Whether empirical confidence replaces or sits beside the current lead-time heuristic during the transition |
 | 7, 8 | Where user state lives. The project has no identity model and no user store; `st.session_state` does not survive a restart |
 | 9 | Delivery semantics: at-least-once versus at-most-once, and what a user sees when a send fails. The existing idempotency key is designed for the former |
@@ -465,9 +484,16 @@ Recorded here so they are not rediscovered as surprises:
   actually shipped; **contrast ratios and typography remain unverified**, and those
   are the parts an image would have helped with.
 - **State and viewport coverage remain partial.** `verify_layout.py` covers
-  390x844 and 1280x800 with default filters, so tablet widths remain unmeasured. The
-  stale/exhausted state is now measured by the second warehouse branch in
-  `verify_streamlit.py`; empty and error states are still not measured.
+  390x844 and 1280x800 with default filters, so tablet widths remain unmeasured, and
+  the three browser gates skip the custom-location page whenever `--skip-live-api` is
+  set. State coverage is no longer the gap: `verify_streamlit.py` now drives three
+  warehouses — fresh, exhausted-horizon, and unreadable (absent and empty) — for
+  thirty-two checks in total.
+- **Nothing watches the deployment except one hourly workflow.**
+  `verify_live_app.py` asserts each published page renders its own heading and that
+  none raised. It does not check freshness, layout or accessibility against the live
+  app, and it cannot fix what it finds: Community Cloud has no reboot API, so the
+  remedy is still a person clicking **Reboot app**.
 - **Performance is measured server-side only** (see the UI spec). Browser paint,
   WebGL setup and client-side Altair rendering are unmeasured, and the map is the
   likeliest place for a gap between the two.
@@ -478,6 +504,15 @@ Recorded here so they are not rediscovered as surprises:
 
 ## Explicitly out of scope
 
-Per instruction: no Kafka, no Spark, no Kubernetes. No FastAPI or PostgreSQL
-added for architectural complexity alone — the current DuckDB + dbt + Streamlit
-stack must be correct and usable first.
+Per instruction: no Kafka, no Spark, no Kubernetes, no PostgreSQL or MotherDuck, no
+React, no Airbyte or Meltano, no Great Expectations (145 dbt checks already cover
+it), no Grafana or Prometheus. Nothing here is added for architectural complexity
+alone; the DuckDB + dbt + Streamlit stack must be correct and usable first.
+
+**FastAPI moved into scope and has been built**, which this section previously ruled
+out. The condition it was ruled out under was "added for architectural complexity
+alone", and that is not what it is: `api/` reuses `dashboard.data_access` rather than
+restating its queries, recomputes nothing, adds no runtime dependency to the
+dashboard or the pipeline, and lives in an optional `api` extra that only CI
+installs. It exists to serve the marts to a consumer that does not want a UI. The
+prohibition on complexity for its own sake stands unchanged.
