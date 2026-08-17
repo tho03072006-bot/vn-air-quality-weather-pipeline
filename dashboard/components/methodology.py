@@ -23,9 +23,12 @@ _LIMITATIONS = [
     ),
     (
         "Độ tin cậy chưa phải độ chính xác",
-        "Mức tin cậy hiện suy ra từ lead time, tính đầy đủ của dữ liệu và việc hai "
-        "nguồn air/weather có cùng một lần chạy mô hình hay không. Chưa có đối chiếu "
-        "thực nghiệm với quan trắc, nên không có con số sai số nào được công bố.",
+        "Mức tin cậy vẫn suy ra từ lead time, tính đầy đủ của dữ liệu và việc hai "
+        "nguồn air/weather có cùng một lần chạy mô hình hay không. Đối chiếu mô "
+        "hình–trạm đã có và được công bố, nhưng khoảng cách đó không phải sai số dự "
+        "báo: nó trộn sai số mô hình với sai lệch đại diện giữa điểm lưới tỉnh và vị "
+        "trí trạm, và hai phần này chưa được tách. Vì vậy sản phẩm không công bố con "
+        "số độ chính xác dự báo nào.",
     ),
     (
         "Khung giờ liên tục dùng điểm thấp nhất",

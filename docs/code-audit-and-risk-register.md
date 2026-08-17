@@ -918,6 +918,53 @@ fail.
 
 ---
 
+## P. The same claim written twice, corrected once — P1, resolved
+
+Finding O is about a claim that went stale. This is about *why it stayed* stale: the
+claim was written in more than one place, and only the copy nearest the change was
+rewritten.
+
+Two commits changed what is true. `6de2136` replaced ranked individual hours with
+contiguous 2-3 hour windows. `6b4a08a` published the model-station gap on the Trust
+page, which is the moment "no empirical comparison exists" stopped being true —
+finding O. Each commit rewrote the statement on the surface it was editing. Neither
+swept for duplicates.
+
+Three surfaces carried those statements:
+
+| Surface | Rendered on | Claim left standing |
+|---|---|---|
+| `dashboard/components/methodology.py:26-28` | 7 pages via `methodology_expander` | "Chưa có đối chiếu thực nghiệm với quan trắc" |
+| `dashboard/app_pages/trust.py:120-121` | Trust | "Khung giờ phù hợp là các giờ riêng lẻ được xếp hạng" |
+| This register, limitation table rows 4, 6, 11 | — | Both, plus "no verification fact yet" |
+
+**The contradiction was live and public.** Read from the deployed DOM on 2026-08-17:
+the Today page rendered "Khung giờ liên tục phù hợp hơn trong 72 giờ tới" while the
+Trust page, one click away, said outdoor windows were not contiguous yet. The Trust
+page also carried the methodology expander asserting no empirical comparison existed,
+directly above the table publishing that comparison.
+
+**The gate certified it.** `verify_streamlit.py` asserted eight strings on the Trust
+page. None touched either claim, so both survived two commits and one deployment with
+every check green. This is finding O's failure mode reproduced one commit after finding
+O was recorded, which is the reason it gets its own entry rather than a footnote.
+
+**Fix.** Both statements rewritten to what the product does. The gate now asserts the
+new wording on Today and on Trust; deleting `methodology_expander()` from either page
+fails it, proved by mutation rather than assumed.
+
+**What is deliberately not fixed.** The promise still lives in two places —
+`methodology.py` and Trust's own container — and the methodology strings are asserted
+on 2 of the 7 pages that render the component. The gate now locks both copies but does
+not merge them. Single-sourcing the claim is a refactor of shared copy, and this entry
+exists so that the next person doing it knows why it is worth doing.
+
+**The rule this leaves behind.** A claim written in N places has N ways to go stale,
+and the gate must assert each copy separately. Changing behaviour is not done when the
+nearest sentence is correct; it is done when every copy of that sentence is.
+
+---
+
 ## Data-product limitations to disclose, not silently fix — P2
 
 These are honest modelling limits. They must be visible in the UI and in
@@ -928,14 +975,14 @@ These are honest modelling limits. They must be visible in the UI and in
 | 1 | One anchor point represents an entire province | Any province-level claim implies uniform coverage it does not have |
 | 2 | Anchors are model grid points, not stations | Must never be labelled "station" |
 | 3 | `forecast_issued_at_utc` is **fetch time**, not provider model-run time (`forecast_pipeline.py:55`) | "Issued at" reads as provider authority it does not have |
-| 4 | `confidence_level` derives only from lead time and null-ness (`mart_location_hourly_forecast.sql:99-103`) | Cannot be called accuracy — there is no verification fact yet |
+| 4 | `confidence_level` derives only from lead time and null-ness (`mart_location_hourly_forecast.sql:99-103`) | Cannot be called accuracy. `fct_forecast_verification` now exists, but it measures a model-station gap, not forecast error — finding O |
 | 5 | `outdoor_score` is a transparent heuristic (`:82-98`) | Must never be presented as VN_AQI or as health advice |
-| 6 | "Best windows" are ranked individual hours, not contiguous blocks | A user reads a window as a continuous block of time |
+| 6 | Outdoor windows are contiguous 2h/3h blocks scored by their worst hour; a gap in the data breaks the block | Resolved in `6de2136`. The block is still at most 3 hours, and still ranked by a heuristic |
 | 7 | OpenAQ sensor selection is narrow; no station registry or reconciliation | Coverage looks more complete than it is |
 | 8 | Observed/modeled fusion for current conditions is incomplete | Source of a displayed number can be ambiguous |
 | 9 | Alerts are evaluation-only; no delivery, no persistence | UI must say preview-only |
 | 10 | Custom locations are not persisted | No saved places |
-| 11 | No forecast accuracy mart | No empirical error figures exist |
+| 11 | No forecast accuracy mart, deliberately. `mart_model_station_discrepancy` measures how far the model sits from a station, which mixes model error with representativeness | Publishing it as accuracy would be the lie. No MAE, RMSE or bias figure exists or may be published |
 
 ---
 
@@ -947,11 +994,14 @@ Ordered by dependency, not by appeal:
    coverage.
 2. Observed-recent → observed-delayed → modeled fallback with an explicit
    per-row source label.
-3. Forecast verification fact joining each vintage to the observation that
-   later validated it.
-4. MAE / RMSE / bias by location, pollutant and lead hour, from that fact.
+3. ~~Forecast verification fact joining each vintage to the observation that
+   later validated it.~~ **Built** (`de0186e`, `fct_forecast_verification`). It does
+   not unlock 4: what it measures is a model-station gap, not forecast error.
+4. MAE / RMSE / bias by location, pollutant and lead hour. **Blocked, not pending.**
+   Requires the separation in finding O — comparing the model with itself at the
+   station's coordinates — which has not been built.
 5. Empirical confidence derived from 4, replacing the current heuristic.
-6. Contiguous 2h / 3h outdoor windows.
+6. ~~Contiguous 2h / 3h outdoor windows.~~ **Built** (`6de2136`).
 7. User activity profile and sensitive-group preference.
 8. Saved locations.
 9. Alert delivery with history and status.

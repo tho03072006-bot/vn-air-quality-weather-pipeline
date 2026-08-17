@@ -95,6 +95,11 @@ PAGES: tuple[PageExpectation, ...] = (
             "Mô hình CAMS",
             "Điều cần biết",
             "Số liệu tính lúc",
+            # The shared methodology must acknowledge the published model-station
+            # comparison without relabelling its mixed gap as forecast accuracy.
+            # Assert both promises here so dropping the expander makes the gate fail.
+            "Đối chiếu mô hình–trạm đã có và được công bố",
+            "sản phẩm không công bố con số độ chính xác dự báo nào",
             # The page must promise the two defining properties of the contiguous
             # window instead of falling back to the old individual-hour caveat.
             "giờ kề nhau đủ dữ liệu",
@@ -191,6 +196,9 @@ PAGES: tuple[PageExpectation, ...] = (
             "không phải trạm quan trắc",
             "thời điểm hệ thống lấy dữ liệu",
             "không phải VN_AQI",
+            # This shared-methodology promise is asserted on Trust as well as Today;
+            # either page dropping the expander must make the gate visibly fail.
+            "Đối chiếu mô hình–trạm đã có và được công bố",
             # The guarantee, restated once a verification fact finally existed.
             # It used to read "no empirical comparison exists"; that sentence became
             # false the moment fct_forecast_verification was built, and a guarantee
@@ -200,6 +208,9 @@ PAGES: tuple[PageExpectation, ...] = (
             # that gap as forecast accuracy.
             "không công bố con số độ chính xác dự báo nào",
             "chưa tách được hai phần đó",
+            # The limitations must describe the contiguous windows the product now
+            # serves, not the obsolete ranked-individual-hours behaviour.
+            "Khung giờ phù hợp là khoảng liên tục gồm 2 hoặc 3 giờ kề nhau",
             # The discrepancy table itself, named honestly, with the caveat that
             # bounds it. Thirty-two provinces have no station, and the page must
             # never let their absence read as a good result.
