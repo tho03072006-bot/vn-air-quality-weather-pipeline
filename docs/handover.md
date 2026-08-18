@@ -27,8 +27,8 @@ true when written and false when read.
 |---|---|---|---|
 | Format | `ruff format --check .` | 95 files clean | 2026-08-17 |
 | Lint | `ruff check .` | pass | 2026-08-17 |
-| Unit tests | `pytest` | **333 passed, 1 skipped**, coverage 89.76% | 2026-08-17 |
-| dbt | `dbt build` | **PASS=162, ERROR=0** | 2026-08-17 |
+| Unit tests | `pytest` | **344 passed, 1 skipped**, coverage 89.51% | 2026-08-17 |
+| dbt | `dbt build` | **PASS=170, ERROR=0** | 2026-08-17 |
 | Source freshness | `dbt source freshness` | pass | 2026-08-17 |
 | Dashboard | `python scripts/verify_streamlit.py` | **32/32** — 9 fresh pages + interactions + 6 exhausted + 16 on an unreadable warehouse | 2026-08-17 |
 | Layout | `verify_layout.py --skip-live-api` | **16/16** (8 pages x 2 viewports) | 2026-08-17 |
@@ -198,19 +198,33 @@ remain unverified by eye.
 [ui-design-spec.md](ui-design-spec.md) exclude browser paint, WebGL setup for the
 map, and client-side Altair rendering.
 
-**No accuracy figure is published, and a verification fact now exists.** Those are
-two separate statements and the distinction is the whole of finding O.
-`fct_forecast_verification` pairs each forecast hour with the observation that later
-validated it, and `mart_model_station_discrepancy` publishes the resulting gap on the
-Trust page. That gap is **not** forecast accuracy: it compares a CAMS grid cell with
-one street-level station, so it mixes model error with representativeness error, and
-nothing yet separates the two. Confidence remains derived from lead time,
+**The gap is now fully attributed, and no accuracy figure is published.** Those two
+sentences are both true, and keeping them apart is the whole of finding O. The
+published model-station gap decomposes exactly:
+
+```
+F_anchor − O_station = (F_anchor − M_anchor)   forecast drift
+                     + (M_anchor − M_station)  representativeness
+                     + (M_station − O_station) model offset at the station
+```
+
+All three terms are measured. `mart_forecast_vs_analysis` holds the first and it sits
+near 1.0 with no growth across lead bands, so the gap is not the forecast being
+wrong. `mart_station_representativeness` holds the other two, and
+`assert_decomposition_identity_holds` fails if they stop reconstructing the whole.
+
+**Attribution is not accuracy, and this is where it would be easiest to overclaim.**
+Knowing how the gap divides says nothing about whether either number is right. The
+model-offset term is measured against **one station per city, in two cities**, and
+cannot speak for the other thirty-two provinces — which have no station at all, and
+whose absence must never read as agreement. Confidence still derives from lead time,
 completeness and vintage alignment. No MAE, RMSE or bias is published anywhere, in
 the UI or over the API, and `verify_streamlit.py` asserts the Trust page keeps saying
 so.
 
-This paragraph previously read "there is no verification fact", which stopped being
-true the moment one was built. See findings O and P.
+This paragraph has now been wrong twice as the work moved under it: it once read
+"there is no verification fact", then "nothing yet separates the two". Both were true
+when written. See findings O and P.
 
 **Alerts do not send anything.** The evaluation engine works; there is no delivery
 and no persistence. The page states this.
@@ -256,6 +270,17 @@ Recorded so they do not cost it twice.
   a page failing on a *new* import is proof the code arrived and the process did not
   restart. Reboot from **Manage app**; there is no API for it, and
   `verify_live_app.py` will keep failing until someone does.
+- **A column added to an ingestion does not exist in warehouses already written.**
+  The published asset is rebuilt every six hours from its own previous copy, so its
+  `raw` tables keep the schema their rows were written with. Adding `station_latitude`
+  to a staging model broke that workflow every cycle, and the error named neither the
+  missing column nor the schema missing it -- DuckDB resolved the reference to the
+  alias of the same name and reported `Binder Error: Column "station_latitude"
+  referenced that exists in the SELECT clause`. Nothing local could see it: every
+  fixture is regenerated from current code and always has the column, so the first
+  environment to meet an older schema was production. `tests/test_legacy_raw_schema.py`
+  is the missing step, and `COLUMNS_ADDED_AFTER_FIRST_LOAD` in it is the list the next
+  such column belongs in.
 - **Streamlit Community Cloud can fail to pull, and only whisper about it.** Eight
   consecutive `Updating the app files has failed: exit status 1` lines over two and a
   half hours, with no signal anywhere except the log behind **Manage app**. The
@@ -338,18 +363,35 @@ Recorded so they do not cost it twice.
 
 In order:
 
-1. **Finish the finding O separation — half of it is done.** Forecast drift is now
-   measured against the model's own analysis at the same coordinate, needs no new
-   data, and sits near 1.0 with no growth across lead bands: the published gap is not
-   forecast error. What remains is splitting the rest into representativeness and
-   model offset, which needs CAMS sampled at the station's own coordinates. The
-   coordinates are already in 57 stored `openaq_locations` payloads, and
-   `fetch_modeled_air_quality` takes a `City`-shaped value with `start_date`/`end_date`
-   — so the existing paired window can be backfilled and no client change is needed.
-   Until that split exists, no accuracy figure can be published honestly.
-   **The trap to carry forward:** a drift near 1.0 is not accuracy. The forecast and
-   the analysis are the same model twice, and a model offset by 3.9× produces a
-   faithful forecast offset by 3.9×.
+1. **Re-ingest observed history so the decomposition has real numbers.** The finding O
+   split is built and all three terms are measured — but only on the CI fixture.
+   Measured on the development warehouse on 2026-08-18, read-only: both new marts are
+   **absent** rather than empty, because dbt has not been run there since they were
+   added; `raw.air_quality_hourly` has no `station_latitude` column; and
+   `raw.air_quality_at_station_hourly` does not exist.
+
+   A `dbt build` there will create `mart_forecast_vs_analysis` with real numbers,
+   because that term needs no new ingestion. `mart_station_representativeness` will
+   build and stay empty: its staging model compiles to a typed empty set when the raw
+   table is absent, which is the behaviour `tests/test_legacy_raw_schema.py` pins.
+
+   Rows loaded before `b191358` carry no station coordinates and never will —
+   backfilling them would mean rewriting immutable raw history to look like something
+   it was not. One historical run gives future rows their positions, and it needs
+   `OPENAQ_API_KEY`:
+
+   ```powershell
+   python -m vn_air_quality_weather.pipeline --date <a date already ingested>
+   ```
+
+   The station-CAMS fetch itself needs no key — Open-Meteo is open — so once
+   coordinates exist, `start_date`/`end_date` can backfill the model side over the
+   window that already has pairs.
+   **The trap to carry forward:** the decomposition attributes the gap; it does not
+   measure accuracy. Forecast drift near 1.0 means the forecast agrees with the model,
+   not that the model is right, and a model offset by 3.9× produces a faithful
+   forecast offset by 3.9×. The offset term is measured against one station per city
+   in two cities and says nothing about the other thirty-two provinces.
 2. **Decide whether the deployment should reload its warehouse.** Pipeline health now
    shows that the served file and the published asset can diverge; nothing acts on it.
    The options and the constraints that must hold — `read_only=True`, atomic writes,
