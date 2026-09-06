@@ -231,6 +231,90 @@ else's chart. This API publishes no accuracy figure at all.
 200 with a sad payload: a health endpoint that reports success while the thing it
 reports on is unreadable is a check that cannot fail.
 
+## SQL Server serving database
+
+DuckDB stays the analytical warehouse. A separate copy of the fourteen relations the
+web application reads is published into SQL Server, because DuckDB admits one writer
+or many readers and never both: a web process holding a read pool on the warehouse
+file takes the lock the 02:00 DAG needs, and the symptom is a broken pipeline rather
+than a slow page.
+
+```powershell
+python -m pip install --editable ".[etl]"
+# Credentials live in .env, never in a committed file. See .env.example.
+python scripts\publish_to_sqlserver.py
+python scriptserify_sqlserver_publish.py
+```
+
+The publish drops, recreates and refills every table inside one transaction, so the
+serving copy is always exactly one dbt build and never a blend of two. All fourteen
+relations together are about nine thousand rows, which is why a full reload is
+cheaper than a merge key per table and has nowhere for a divergence to hide. The
+target schema is derived from `information_schema` and from measuring the data, so
+there is no hand-written DDL to drift from the models dbt already owns.
+
+**Run the publish on a short timer, not only after a DAG.** Five of the fourteen
+relations are dbt views that read `current_timestamp` on every query, and they are
+views on purpose — `mart_current_conditions` picks the forecast hour nearest to now,
+and both window models carry a comment recording that they were tables once and
+froze at build time, recommending hours that had already elapsed. Copying a live view
+into a static table reintroduces exactly that defect. The answer is cadence: the
+publish costs about a second, so it runs every few minutes and the frozen `as_of_utc`
+is never older than that. Rewriting the five models as T-SQL views over the published
+tables would instead put a second copy of the decision logic in a second language,
+free to disagree with the first.
+
+`dbo.warehouse_version` is the single control row a reader polls. `version_id`
+advances only when the *content* changed — a hash over every published value except
+the clock-derived ones — so a five-minute timer does not look like new data every
+five minutes. `refreshed_at` always moves, which is what distinguishes a publisher
+that is running and finding nothing new from one that has stopped.
+
+### Who publishes, and when
+
+Three callers run the same function, `vn_air_quality_weather.sqlserver_publish.publish_serving_marts`.
+It lives in the installed package rather than in `scripts/` because the Airflow image
+installs the package and not this directory, and a DAG task and a shell must not run
+two copies of it.
+
+| Caller | Cadence | Why |
+|---|---|---|
+| `scripts\publish_to_sqlserver.py` | by hand | development and one-off checks |
+| `publish_serving_copy` task in both DAGs | after each run | a finished run reaches the page in seconds |
+| Windows scheduled task | every 5 minutes | keeps the copied `current_timestamp` fresh |
+
+Register the timer once. It runs as the current user while logged on, so no password
+is stored:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scriptsegister_publish_timer.ps1
+powershell -ExecutionPolicy Bypass -File scriptsegister_publish_timer.ps1 -Remove
+```
+
+It appends one line per tick to `logs\publish_to_sqlserver.log` and trims the file
+rather than rotating it.
+
+The Airflow image installs `msodbcsql18`, because pyodbc is a binding around a system
+driver rather than a self-contained client: without it `pip install pyodbc` succeeds
+and the task fails at run time with an error naming a missing shared object. Inside a
+container `SQLSERVER_HOST` is overridden to `host.docker.internal` in
+`docker-compose.yml` — `localhost` from `.env` is right from PowerShell and resolves
+to the container itself in Docker. `publish_serving_copy` holds the single-slot
+warehouse pool although it only reads, because DuckDB lets a reader block a writer.
+
+`verify_sqlserver_publish.py` compares both databases value by value rather than
+counting rows, and exits non-zero on any difference, so it can gate a pipeline run.
+Two defects it has already caught are worth naming, because neither raised an error
+on its own:
+
+- `[column]` is list construction in DuckDB, not identifier quoting. Every scalar
+  came back wrapped in a one-element list and every measured string width came back
+  as 1.
+- With `fast_executemany`, pyodbc ignores an aware datetime's own offset and stamps
+  the client machine's onto the wall clock, storing 06:00 UTC as 06:00+07:00. The
+  values are bound as ISO-8601 text now, which both of the driver's paths read the
+  same way.
+
 ## Deployment
 
 The Streamlit Community Cloud deployment target is deliberately simple: the app
