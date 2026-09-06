@@ -1,5 +1,6 @@
 """Ephemeral modeled forecasts for user-selected Vietnam coordinates."""
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -189,7 +190,12 @@ def score_outdoor_conditions(
             temperature_penalty = min(15.0, (15.0 - apparent_temperature_c) * 2.0)
     uv_penalty = max(0.0, (uv_index or 0.0) - 5.0) * 2.0
     raw_score = 100.0 - air_penalty - rain_penalty - temperature_penalty - uv_penalty
-    score = round(max(0.0, raw_score), 1)
+    # Half away from zero, matching DuckDB, rather than the built-in round().
+    # Python rounds half to even and does it on the true binary value, so a raw score
+    # of 28.95 -- stored as 28.9499999... -- became 28.9 where the warehouse said
+    # 29.0. The score is clamped at zero first, so floor(x*10 + 0.5) is the whole
+    # rule; no negative branch is reachable.
+    score = math.floor(max(0.0, raw_score) * 10.0 + 0.5) / 10.0
     if raw_score >= 70.0:
         label = "Phù hợp hơn"
     elif raw_score >= 45.0:
@@ -198,9 +204,14 @@ def score_outdoor_conditions(
         label = "Nên hạn chế"
 
     apparent = apparent_temperature_c if apparent_temperature_c is not None else temperature_2m_c
+    # One decimal on the rain, matching dbt. Its round(x, 0) on a double returns a
+    # double and concat renders "10.0"; this said "10" and had done since it was
+    # written, so the custom-location page spelled a reading differently from every
+    # province page. The mirror is now pinned to the warehouse by
+    # test_outdoor_score_matches_the_warehouse rather than to hand-written values.
     explanation = (
         f"PM2.5 {pm25_ugm3 or 0.0:.1f} µg/m³; "
-        f"mưa {precipitation_probability_pct or 0.0:.0f}%; "
+        f"mưa {precipitation_probability_pct or 0.0:.1f}%; "
         f"cảm nhận {apparent or 0.0:.1f} °C"
     )
     return score, label, explanation
