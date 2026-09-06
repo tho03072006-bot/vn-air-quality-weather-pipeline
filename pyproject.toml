@@ -30,6 +30,11 @@ etl = [
     "dbt-core>=1.9,<2",
     "dbt-duckdb>=1.9,<2",
     "dlt[duckdb]>=1.29,<2",
+    # Publishing the serving marts into SQL Server. Kept in this extra rather than
+    # in the base dependencies because nothing that reads the warehouse imports it:
+    # the publish runs at the end of a pipeline, and it needs a system ODBC driver
+    # that a read-only app host has no reason to install.
+    "pyodbc>=5.2,<6",
 ]
 dev = [
     "pytest>=8,<9",

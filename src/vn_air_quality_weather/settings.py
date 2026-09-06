@@ -52,6 +52,24 @@ class Settings(BaseSettings):
     alert_cooldown_minutes: int = 180
     alert_max_data_age_minutes: int = 180
 
+    # The serving database. DuckDB stays the analytical warehouse that dbt builds
+    # into; SQL Server holds only the marts the web application reads, republished
+    # in full after every pipeline run. The split exists because DuckDB admits one
+    # writer or many readers and not both: a web process holding a read connection
+    # would take the file lock the 02:00 DAG needs, and the failure would surface as
+    # a broken pipeline rather than a broken page.
+    sqlserver_host: str = "localhost"
+    sqlserver_port: int = 1433
+    sqlserver_database: str = "vn_air_quality"
+    sqlserver_user: str = ""
+    sqlserver_password: SecretStr = SecretStr("")
+    sqlserver_driver: str = "ODBC Driver 18 for SQL Server"
+    # Driver 18 encrypts by default and then verifies the certificate, which a local
+    # developer instance signs itself. Trusting it is correct for localhost and wrong
+    # for anything else, so both stay configurable rather than hard-coded.
+    sqlserver_encrypt: bool = True
+    sqlserver_trust_server_certificate: bool = True
+
     def retry_policy(self) -> RetryPolicy:
         """Build the shared HTTP retry policy from configuration."""
 
@@ -75,6 +93,40 @@ class Settings(BaseSettings):
         if not self.aws_region or not self.aws_s3_bucket:
             raise ValueError("AWS_REGION and AWS_S3_BUCKET are required for raw_backend=s3")
         return self.aws_region, self.aws_s3_bucket
+
+    def require_sqlserver_odbc(self) -> str:
+        """Return the ODBC connection string, or fail without exposing the secret.
+
+        Built here rather than in the publishing script so that the script, the test
+        suite and any future reader agree on one spelling of the connection. The
+        password is read from SecretStr at the last moment and never returned on its
+        own: the only value that leaves this method is the assembled string, which
+        callers pass straight to the driver.
+
+        ODBC delimits a value with braces, so a password containing a brace has to
+        double it. That is not hypothetical -- the password here is meant to be
+        replaced with a generated one, and generated passwords contain punctuation.
+        """
+
+        if not self.sqlserver_user:
+            raise ValueError("SQLSERVER_USER is required to publish to SQL Server")
+        secret = self.sqlserver_password.get_secret_value()
+        if not secret:
+            raise ValueError("SQLSERVER_PASSWORD is required to publish to SQL Server")
+
+        encrypt = "yes" if self.sqlserver_encrypt else "no"
+        trust = "yes" if self.sqlserver_trust_server_certificate else "no"
+        return ";".join(
+            (
+                f"DRIVER={{{self.sqlserver_driver}}}",
+                f"SERVER=tcp:{self.sqlserver_host},{self.sqlserver_port}",
+                f"DATABASE={self.sqlserver_database}",
+                f"UID={{{self.sqlserver_user.replace('}', '}}')}}}",
+                f"PWD={{{secret.replace('}', '}}')}}}",
+                f"Encrypt={encrypt}",
+                f"TrustServerCertificate={trust}",
+            )
+        )
 
 
 @lru_cache
