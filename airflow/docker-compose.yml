@@ -32,6 +32,18 @@ x-airflow-common: &airflow-common
     # to localhost and is not production-ready. Override AIRFLOW_JWT_SECRET in .env
     # for anything that is not a local machine.
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-local-dev-shared-jwt-secret}
+    # SQLSERVER_HOST arrives from ../.env as `localhost`, which is correct on the
+    # developer's machine and wrong inside a container, where it resolves to the
+    # container itself and the publish fails with a connection refused that names
+    # a host the reader believes is running. Overridden here rather than in .env
+    # because .env is also read by the same scripts run from PowerShell, where
+    # `localhost` is right. Everything else about the connection -- database, user,
+    # password, encryption -- still comes from .env and is not restated.
+    SQLSERVER_HOST: ${SQLSERVER_HOST_FROM_CONTAINER:-host.docker.internal}
+  extra_hosts:
+    # Docker Desktop resolves host.docker.internal on its own; this makes the same
+    # compose file work on a plain Linux daemon, where it does not.
+    - "host.docker.internal:host-gateway"
   volumes:
     - ./dags:/opt/airflow/dags
     # src is mounted, not only baked into the image. PYTHONPATH points at

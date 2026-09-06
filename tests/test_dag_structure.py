@@ -17,9 +17,21 @@ from vn_air_quality_weather.settings import WAREHOUSE_WRITER_POOL
 DAG_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
 # Tasks that open the DuckDB file or shell out to dbt. DuckDB serialises writers,
 # so each of these has to hold the single-slot pool or two DAGs can collide.
+#
+# publish_serving_copy only reads, and still belongs here: DuckDB lets a reader block
+# a writer, so publishing while the other DAG is inside dbt build would either fail
+# or stall it.
 WAREHOUSE_WRITING_TASKS = {
-    "vn_air_quality_weather_daily.py": {"extract_store_and_load", "build_analytics"},
-    "vn_air_quality_weather_forecast.py": {"ingest_forecast", "build_analytics"},
+    "vn_air_quality_weather_daily.py": {
+        "extract_store_and_load",
+        "build_analytics",
+        "publish_serving_copy",
+    },
+    "vn_air_quality_weather_forecast.py": {
+        "ingest_forecast",
+        "build_analytics",
+        "publish_serving_copy",
+    },
 }
 
 

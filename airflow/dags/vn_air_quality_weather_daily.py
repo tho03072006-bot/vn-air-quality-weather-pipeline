@@ -9,6 +9,7 @@ from airflow.timetables.interval import CronDataIntervalTimetable
 from vn_air_quality_weather.airflow_callbacks import log_task_failure
 from vn_air_quality_weather.pipeline import run_day, run_dbt_build
 from vn_air_quality_weather.settings import WAREHOUSE_WRITER_POOL, Settings
+from vn_air_quality_weather.sqlserver_publish import publish_serving_marts
 
 
 @dag(
@@ -70,6 +71,28 @@ def vn_air_quality_weather_daily():
         run_dbt_build(settings.duckdb_path, project_root=Path("/opt/project"))
         return summary
 
+    @task(execution_timeout=timedelta(minutes=10), pool=WAREHOUSE_WRITER_POOL)
+    def publish_serving_copy(summary: dict[str, object]) -> dict[str, object]:
+        """Push the rebuilt marts into SQL Server so the web application sees them.
+
+        Holds the warehouse pool although it only reads. DuckDB lets a reader block a
+        writer, so opening the file while the other DAG is inside dbt build would
+        either fail here or stall there.
+
+        Not the only publisher, and not the important one. The same function runs on a
+        short timer, because five serving relations are views that read
+        current_timestamp and freeze the moment they are copied. This task exists so a
+        finished run reaches the page in seconds instead of at the next tick.
+        """
+
+        result = publish_serving_marts(Settings())
+        print(
+            "serving_published "
+            f"rows={result.total_rows} version={result.version_id} "
+            f"changed={result.content_changed} vintage={result.forecast_vintage}"
+        )
+        return summary
+
     @task
     def log_result(summary: dict[str, object]) -> None:
         print(
@@ -82,7 +105,7 @@ def vn_air_quality_weather_daily():
 
     configuration = validate_configuration()
     loaded = extract_store_and_load(configuration)
-    log_result(build_analytics(loaded))
+    log_result(publish_serving_copy(build_analytics(loaded)))
 
 
 vn_air_quality_weather_daily()
