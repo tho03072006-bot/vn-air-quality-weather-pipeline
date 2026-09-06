@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import duckdb
@@ -56,19 +56,37 @@ def load_location_forecast(
     database_path: Path,
     location_key: str,
     hours: int = 72,
+    as_of: datetime | None = None,
 ) -> pd.DataFrame:
-    """Return the latest modeled forecast horizon for one location."""
+    """Return the latest modeled forecast horizon for one location.
 
-    query = """
+    `as_of` overrides the clock the window is anchored on, and defaults to reading it.
+    Callers in the app never pass it; it exists so the horizon can be compared against
+    the Java translation of this query at one pinned instant instead of at whatever
+    moment each side happened to run. Without it the two would bound different hours
+    and disagree for a reason that is not a defect -- and on a warehouse whose data has
+    aged past the horizon, both would return nothing and the comparison would pass by
+    being empty.
+    """
+
+    anchor = "cast(? as timestamptz)" if as_of is not None else "current_timestamp"
+    query = f"""
         select *
         from analytics.mart_location_hourly_forecast
         where location_key = ?
-          and valid_at_utc >= date_trunc('hour', current_timestamp) - interval '1 hour'
-          and valid_at_utc < date_trunc('hour', current_timestamp) + (? * interval '1 hour')
+          and valid_at_utc >= date_trunc('hour', {anchor}) - interval '1 hour'
+          and valid_at_utc < date_trunc('hour', {anchor}) + (? * interval '1 hour')
         order by valid_at_utc
     """
+    # The anchor appears in two predicates, so a pinned one is bound twice. DuckDB
+    # numbers positional parameters by occurrence, and passing it once would shift
+    # `hours` into the second anchor's place.
+    parameters: list[object] = (
+        [location_key, hours] if as_of is None else [location_key, as_of, as_of, hours]
+    )
+
     with duckdb.connect(str(database_path), read_only=True) as connection:
-        return connection.execute(query, [location_key, hours]).fetchdf()
+        return connection.execute(query, parameters).fetchdf()
 
 
 def load_decision_windows(
