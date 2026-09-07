@@ -1,7 +1,7 @@
 """Republish the serving marts from DuckDB into SQL Server.
 
 DuckDB remains the analytical warehouse: dbt builds into it and nothing else writes
-it. SQL Server holds only the fourteen relations the web application reads, and this
+it. SQL Server holds only the fifteen relations the web application reads, and this
 module is the one bridge between them. It lives in the installed package rather
 than in `scripts/` because the Airflow image installs the package and not the
 scripts directory, and the DAG task and the command line have to run the same code.
@@ -16,7 +16,7 @@ page -- the hardest kind of failure to trace back to its cause. Publishing into 
 server that was built for concurrent readers removes the contention instead of
 scheduling around it.
 
-**Full reload, not incremental.** All fourteen relations together are roughly nine
+**Full reload, not incremental.** All fifteen relations together are roughly twelve
 thousand rows. At that size an incremental strategy buys nothing and costs a merge
 key per table, each of which is a place where the serving copy can silently diverge
 from the mart. Every run drops, recreates and refills every table inside a single
@@ -35,7 +35,7 @@ from an observation is the failure this project spends the most effort avoiding.
 Timestamps stay in UTC; converting to Asia/Ho_Chi_Minh is the presentation layer's
 job and happens no earlier.
 
-**Run this on a short timer, not only after a DAG.** Five of the fourteen serving
+**Run this on a short timer, not only after a DAG.** Five of the fifteen serving
 relations are dbt *views* that read `current_timestamp` on every query, and they are
 views on purpose: `mart_current_conditions` picks the forecast hour nearest to now,
 `mart_outdoor_decision_window` ranks the hours still ahead, and both models carry a
@@ -527,13 +527,9 @@ def content_hash(plans: list[TablePlan]) -> str:
 
     digest = hashlib.sha256()
     for plan in plans:
-        keep = [
-            i for i, c in enumerate(plan.columns) if c.name not in CLOCK_DERIVED_COLUMNS
-        ]
+        keep = [i for i, c in enumerate(plan.columns) if c.name not in CLOCK_DERIVED_COLUMNS]
         digest.update(plan.name.encode())
-        for line in sorted(
-            "\x1f".join(canonical(row[i]) for i in keep) for row in plan.rows
-        ):
+        for line in sorted("\x1f".join(canonical(row[i]) for i in keep) for row in plan.rows):
             digest.update(b"\x1e")
             digest.update(line.encode())
     return digest.hexdigest()
@@ -632,8 +628,6 @@ def publish_version(
     return version, True
 
 
-
-
 @dataclass(frozen=True, slots=True)
 class RelationSummary:
     """What one relation contributed to a publish."""
@@ -704,15 +698,11 @@ def publish_serving_marts(
         cursor.fast_executemany = True
         carried = ensure_version_table(cursor)
         published = publish(cursor, plans)
-        version, changed = publish_version(
-            cursor, carried, content_hash(plans), vintage, published
-        )
+        version, changed = publish_version(cursor, carried, content_hash(plans), vintage, published)
         sql.commit()
 
     return PublishSummary(
-        relations=tuple(
-            RelationSummary(p.name, len(p.rows), len(p.columns)) for p in plans
-        ),
+        relations=tuple(RelationSummary(p.name, len(p.rows), len(p.columns)) for p in plans),
         total_rows=published,
         version_id=version,
         content_changed=changed,

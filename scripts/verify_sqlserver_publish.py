@@ -151,9 +151,7 @@ def main(argv: list[str] | None = None) -> int:
 
         # The control row is state the marts do not carry, so it is checked on its own
         # terms: exactly one row, and a clock that is still moving.
-        control = cursor.execute(
-            f"SELECT count(*) FROM {qualified(VERSION_TABLE)}"
-        ).fetchone()
+        control = cursor.execute(f"SELECT count(*) FROM {qualified(VERSION_TABLE)}").fetchone()
         if control[0] != 1:
             failures.append(VERSION_TABLE)
             print(f"  FAIL  {VERSION_TABLE}: {control[0]} rows, expected exactly 1")
@@ -186,8 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"SELECT forecast_vintage FROM {qualified(VERSION_TABLE)}"
             ).fetchone()[0]
             published_vintage = cursor.execute(
-                "SELECT MAX(forecast_issued_at_utc) FROM "
-                f"{qualified('mart_current_conditions')}"
+                f"SELECT MAX(forecast_issued_at_utc) FROM {qualified('mart_current_conditions')}"
             ).fetchone()[0]
             if canonical(advertised) == canonical(published_vintage):
                 print(f"  OK    {'forecast vintage':<{width}}  control row matches the mart")

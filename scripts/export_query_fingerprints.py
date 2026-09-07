@@ -1,9 +1,10 @@
-"""Fingerprint every dashboard query, so a Java translation can be checked against it.
+"""Fingerprint every serving query, so the Java translation can be checked against it.
 
 The web application is being rewritten in Spring, and its repositories restate the
-sixteen queries in `dashboard/data_access.py` in T-SQL. A restatement can be wrong in
-ways that compile, connect and return rows: a predicate dropped, an ordering lost, two
-columns swapped between fields of the same type. None of those raise anything.
+sixteen queries in `vn_air_quality_weather/serving_queries.py` in T-SQL. A restatement
+can be wrong in ways that compile, connect and return rows: a predicate dropped, an
+ordering lost, two columns swapped between fields of the same type. None of those
+raise anything.
 
 This script runs each query against DuckDB and writes what it returned, reduced to a
 shape that can be compared across two languages:
@@ -38,24 +39,16 @@ import argparse
 import datetime as dt
 import hashlib
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pandas as pd
 
+from vn_air_quality_weather import serving_queries as data_access
 from vn_air_quality_weather.settings import Settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-# `dashboard` is a package in the repository root, not an installed one, and running a
-# file inside scripts/ puts scripts/ on the path rather than the root. The dashboard's
-# own entry point does the same thing for the same reason.
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from dashboard import data_access  # noqa: E402
 
 DEFAULT_OUT = PROJECT_ROOT / "data" / "fixtures" / "query_fingerprints.json"
 

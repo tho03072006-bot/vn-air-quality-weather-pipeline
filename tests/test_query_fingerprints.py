@@ -15,8 +15,8 @@ import duckdb
 import pandas as pd
 import pytest
 
-from dashboard.data_access import load_location_forecast
 from scripts.export_query_fingerprints import canonical, is_missing
+from vn_air_quality_weather.serving_queries import load_location_forecast
 
 UTC = dt.UTC
 BANGKOK = dt.timezone(dt.timedelta(hours=7))

@@ -3,7 +3,7 @@
 Register (or remove) the Windows scheduled task that republishes the serving marts.
 
 .DESCRIPTION
-The web application reads SQL Server, and five of the fourteen relations it reads are
+The web application reads SQL Server, and five of the fifteen relations it reads are
 dbt views that evaluate `current_timestamp` on every query. Copied into static tables
 they stop moving, so `mart_current_conditions` keeps recommending an hour that has
 already passed and the freshness columns report a snapshot as FRESH. Republishing on

@@ -8,7 +8,7 @@ as a file rather than as an inline command in the task definition so the behavio
 is reviewable, testable from a prompt, and changeable without re-registering.
 
 Why a timer publishes at all, when both DAGs already publish at the end of a run:
-five of the fourteen serving relations are dbt views that read `current_timestamp`
+five of the fifteen serving relations are dbt views that read `current_timestamp`
 on every query. `mart_current_conditions` picks the forecast hour nearest to now and
 the window models drop hours that have elapsed, so a copy taken six hours ago
 describes a "now" that has passed. Copying them on a short cadence keeps the frozen
@@ -39,7 +39,7 @@ if (-not (Test-Path $logDirectory)) { New-Item -ItemType Directory -Path $logDir
 
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
 
-# The publish prints a fourteen-line table; only the verdict is worth keeping every
+# The publish prints a fifteen-line table; only the verdict is worth keeping every
 # five minutes. A failure prints to stderr and is kept in full, because that is the
 # case somebody will read this file to understand.
 Push-Location $repo

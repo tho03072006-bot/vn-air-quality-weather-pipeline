@@ -25,7 +25,7 @@ location records are based on GeoNames. Requests are restricted to country code
 authoritative 2025 boundary assignment. User-entered coordinates are WGS84 and
 must fall inside the project's conservative Vietnam service envelope.
 
-Results are cached in the Streamlit process for 15 minutes and are not persisted
+Results are computed in the web application process for one request and are not persisted
 as saved places, warehouse dimensions or forecast vintages. The UI exposes the
 requested coordinate and the model grid coordinate because Open-Meteo may select
 a nearby grid-cell rather than the exact point.

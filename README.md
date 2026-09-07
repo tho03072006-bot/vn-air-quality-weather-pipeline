@@ -1,22 +1,18 @@
-# Vietnam Air Quality & Weather Decision Platform
+# Vietnam Air Quality & Weather Data Platform
 
-An end-to-end decision platform for Vietnam, with both a local development path
-and a read-only public deployment target on Streamlit Community Cloud. It
-preserves observed OpenAQ data separately from modeled Open-Meteo/CAMS data,
-precomputes versioned 72-hour forecasts for all 34 province-level units effective
-from 1 July 2025, builds tested DuckDB/dbt marts, and serves a Vietnamese
-Streamlit dashboard. The deployment warehouse is a release asset, not a file
-committed to git.
+An end-to-end decision platform for Vietnam. It preserves observed OpenAQ data
+separately from modeled Open-Meteo/CAMS data, precomputes versioned 72-hour forecasts
+for all 34 province-level units effective from 1 July 2025, builds tested DuckDB/dbt
+marts, and publishes fifteen serving relations into SQL Server for the web
+application to read.
 
-**Live:** <https://vn-air-quality-weather.streamlit.app/>
-
-Verified against the deployed app rather than assumed: all 34 anchors carry a
-forecast with none missing, no anchor is serving mismatched air and weather
-vintages, and no page renders an operator shell command at a reader.
+**The user interface lives in a separate repository.** `../vn-air-web` is a Spring
+Boot application deployed as a war to Tomcat 11; this repository is the pipeline that
+feeds it. The two are joined at exactly one place -- the SQL Server serving database --
+and at one contract, described under [SQL Server serving database](#sql-server-serving-database).
 
 **Start here if you are picking this up:** [docs/handover.md](docs/handover.md)
-records the verified state, what is deliberately not verified, and where to
-continue.
+records the verified state, what is deliberately not verified, and where to continue.
 
 ## Architecture
 
@@ -24,10 +20,8 @@ continue.
 OpenAQ observations + Open-Meteo/CAMS history and forecasts
     -> Airflow 3 -> immutable raw JSON (local/S3)
     -> dlt merge with forecast vintages -> DuckDB
-    -> dbt facts/marts/tests -> Streamlit decision pages
-
-Open-Meteo Geocoding + user WGS84 coordinates
-    -> bounded Streamlit cache -> temporary modeled forecast (no warehouse write)
+    -> dbt facts/marts/tests
+    -> publish 15 relations -> SQL Server -> vn-air-web (Spring, Tomcat)
 ```
 
 See [architecture and lineage](docs/architecture.md) for grains, keys and the
@@ -115,10 +109,10 @@ One command runs every gate. It calls no real API and no AWS endpoint:
 ```
 
 The script stops at the first failure and names the gate that broke. Add
-`-UseRealWarehouse` to build dbt against the real DuckDB file instead of the
-demo fixture, `-SkipDbt` to run only the Python gates, or `-SkipFreshness` to
-skip only the freshness check. Freshness remains enabled for a real warehouse
-by default, so stale production-like data fails verification as intended.
+`-UseRealWarehouse` to build dbt against the real DuckDB file instead of the demo
+fixture, `-SkipDbt` to run only the Python gates, or `-SkipFreshness` to skip only the
+freshness check. Freshness remains enabled for a real warehouse by default, so stale
+production-like data fails verification as intended.
 
 The individual steps, if you prefer to run them by hand:
 
@@ -126,114 +120,57 @@ The individual steps, if you prefer to run them by hand:
 python -m ruff format --check .
 python -m ruff check .
 python -m pytest
-python -m compileall -q src dashboard airflow\dags scripts
-python scripts\build_demo_warehouse.py `
-    --database data\warehouse\demo.duckdb
-$env:DUCKDB_PATH = (Resolve-Path "data\warehouse\demo.duckdb")
-dbt build --project-dir dbt --profiles-dir dbt
-python scripts\verify_streamlit.py
-dbt source freshness --project-dir dbt --profiles-dir dbt
-```
-
-### Layout checks in a real browser
-
-`verify.ps1` is offline by contract, so the browser gate is separate. It needs a
-running server, a browser binary, and one live API call on the custom-location
-page:
-
-```powershell
-python -m pip install --editable ".[dev,etl,qa]"
-python -m playwright install chromium
-```
-
-Then, with the app running from the project root in another shell:
-
-```powershell
-python scripts\verify_layout.py
-```
-
-It measures nine pages at 390x844 and 1280x800 for two faults `verify_streamlit.py`
-structurally cannot see, because AppTest has no DOM and no layout engine: a chart
-drawn wider than its container, and text clipped by a CSS ellipsis. Both have
-shipped before, and the first recurred at a viewport its original fix did not cover.
-
-Two accessibility gates run the same way:
-
-```powershell
-python scripts\verify_a11y.py       # WCAG 1.4.3 / 1.4.11 text contrast
-python scripts\verify_keyboard.py   # WCAG 2.1.1 / 2.4.7 keyboard, 2.4.3 advisory
-```
-
-The contrast gate composites each text node's foreground against its ancestor
-backgrounds; the keyboard gate presses Tab and measures what the keyboard actually
-reaches and how focus looks. Both pass today. 2.4.3 (focus order) is reported but
-does not fail the run — sections I and K of
-[the audit register](docs/code-audit-and-risk-register.md) record why, along with
-the five false-positive classes that had to be removed from these gates before
-their output could be trusted.
-
-All three browser gates run in CI with `--skip-live-api`, which drops the
-custom-location page because its driver calls the real forecast API and CI is
-offline by contract. Run them without the flag locally to cover all nine pages.
-
-## Dashboard
-
-The scheduled province views read serving marts. The optional custom-location
-page calls Open-Meteo only after the user submits a place or coordinate and
-caches the temporary result for 15 minutes without writing it to DuckDB. To
-open a deterministic offline demo:
-
-```powershell
+python -m compileall -q src airflow\dags scripts
 python scripts\build_demo_warehouse.py --database data\warehouse\demo.duckdb
 $env:DUCKDB_PATH = (Resolve-Path "data\warehouse\demo.duckdb")
 dbt build --project-dir dbt --profiles-dir dbt
-python -m streamlit run dashboard\app.py
+dbt source freshness --project-dir dbt --profiles-dir dbt
 ```
 
-For the real warehouse, set `DUCKDB_PATH` to
-`data\warehouse\vn_air_quality_weather.duckdb` instead.
+**The browser gates left with the pages they measured.** `verify_layout.py`,
+`verify_a11y.py` and `verify_keyboard.py` drove a Playwright browser over the
+Streamlit pages, and the four defect classes they existed to catch -- a chart wider
+than its container, text clipped by CSS, a contrast ratio below WCAG AA, a control Tab
+cannot reach -- are now the web application's to check. They are, in
+`vn-air-web/src/test/java/vn/aqw/web/a11y/`, which runs on every build there rather
+than only by hand here. What is not carried over is recorded in that project's README
+under *What the tests could not see, and what found it*.
 
-Pages: **Hôm nay**, **Dự báo 24–72 giờ**, **Địa điểm tùy chọn**,
-**Bản đồ Việt Nam**, **So sánh địa điểm**, **Lịch sử**, **Cảnh báo**,
-**Độ tin cậy dữ liệu** and **Pipeline health**. Province views support all 34
-anchors; the custom page supports Vietnam place search and validated WGS84
-coordinates. Every modeled view shows source, coverage and confidence labels
-and avoids presenting the planning heuristic as official VN_AQI.
+## The user interface, and where it went
 
-## Read API
+This repository no longer serves a UI. Both surfaces it used to carry were replaced by
+`../vn-air-web` and were removed, with their tests, in the same commit:
 
-A read-only HTTP view of the same marts, for consumers that want the numbers
-without the UI. It runs from the project root like the dashboard, reuses the same
-`dashboard.data_access` queries rather than restating their SQL, and opens every
-connection with `read_only=True`.
+| Removed | What it was | What replaced it |
+|---|---|---|
+| `dashboard/` | nine-page Streamlit app | the nine Thymeleaf pages in vn-air-web |
+| `api/main.py` | read-only FastAPI view of the marts at `/v1/*` | **nothing** |
 
-```powershell
-python -m pip install --editable ".[api]"
-$env:DUCKDB_PATH = (Resolve-Path "data\warehouse\demo.duckdb")
-python -m uvicorn api.main:app --reload
-```
+**The API has no successor, and that is a loss worth naming rather than glossing.**
+`/v1/current`, `/v1/forecast/{province_code}` and their `disclosure` object were the
+only machine-readable view of these marts. vn-air-web serves HTML and one status
+endpoint; a consumer that wanted the numbers without the UI now has to read SQL Server
+directly, which means it also has to be trusted with a database credential. Restoring
+a JSON API is a real piece of work, not a checkbox, and it is not scheduled.
 
-Endpoints: `GET /v1/health`, `GET /v1/current`, `GET /v1/current/{province_code}`
-and `GET /v1/forecast/{province_code}?lead_hours=`. Interactive docs at `/docs`.
+**What survived the removal, and why.** `dashboard/data_access.py` moved to
+`src/vn_air_quality_weather/serving_queries.py` rather than being deleted. It had
+stopped being a dashboard's data layer some time before the dashboard was retired: the
+Spring repositories restate all sixteen of its queries in T-SQL, and
+`RepositoryFidelityTests` proves that restatement correct by comparing it against what
+these functions return. Deleting it would have left that gate passing with nothing to
+compare against, which is a worse outcome than the drift it exists to catch. See the
+module docstring for the rules that now apply to it.
 
-Every row keeps `source_type` and `coverage_tier` so a consumer can tell a modelled
-estimate from an observation, and every forecast keeps `forecast_issued_at_utc` so
-it can tell which model run it is reading. Each response carries a `disclosure`
-object, because a consumer parsing JSON never sees the Trust page.
-
-`mart_model_station_discrepancy` is deliberately **not** exposed. It measures a CAMS
-grid cell against one street-level station — model error and representativeness
-error added together — and served over an API, stripped of the caveats the Trust
-page renders beside it, that number becomes a quoted accuracy figure in somebody
-else's chart. This API publishes no accuracy figure at all.
-
-`/v1/health` answers 503 when the warehouse is missing or incomplete, rather than
-200 with a sad payload: a health endpoint that reports success while the thing it
-reports on is unreadable is a check that cannot fail.
+**The public Streamlit Community Cloud deployment is gone with it**, along with
+`refresh-demo-warehouse.yml`, which rebuilt the release asset that deployment read,
+and `verify-live-app.yml`, which checked the live URL. vn-air-web runs on a local
+Tomcat and is not a public replacement for it. Anyone who wants the public demo back
+is restoring a deployment, not reverting a file.
 
 ## SQL Server serving database
 
-DuckDB stays the analytical warehouse. A separate copy of the fourteen relations the
+DuckDB stays the analytical warehouse. A separate copy of the fifteen relations the
 web application reads is published into SQL Server, because DuckDB admits one writer
 or many readers and never both: a web process holding a read pool on the warehouse
 file takes the lock the 02:00 DAG needs, and the symptom is a broken pipeline rather
@@ -241,19 +178,65 @@ than a slow page.
 
 ```powershell
 python -m pip install --editable ".[etl]"
-# Credentials live in .env, never in a committed file. See .env.example.
+# Credentials come from the environment, never from a committed file. See below.
 python scripts\publish_to_sqlserver.py
-python scriptserify_sqlserver_publish.py
+python scripts\verify_sqlserver_publish.py
 ```
 
+### Two logins, and a gate that proves the difference
+
+`sa` was a bootstrap credential and is no longer used by either project. It let the web
+application drop tables and let the publisher read every database on the instance, and
+the only thing between a mistyped query and the serving copy was that nobody had yet
+made the mistake.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\create_serving_logins.ps1 -Persist
+python scripts\verify_serving_logins.py
+```
+
+| Login | Holds | Used by |
+|---|---|---|
+| `vn_air_publish` | `CREATE TABLE`, and `ALTER, SELECT, INSERT, UPDATE` on `dbo` | this project's publish |
+| `vn_air_web` | `SELECT` on `dbo`, with `INSERT, UPDATE, DELETE, ALTER, REFERENCES` explicitly **denied** | vn-air-web's Hikari pool |
+
+The DENY is not redundant. Granting only SELECT already leaves the reader unable to
+write; the DENY is what keeps it that way after somebody adds the login to
+`db_datawriter` to solve an unrelated problem, because DENY outranks every GRANT it
+meets. The grants are schema-level rather than per-table because the publisher drops
+and recreates all fifteen tables on every run, and a grant made to a table object dies
+with that object -- the page would go dark on the first tick of the five-minute timer.
+
+**No password reaches a file.** `create_serving_logins.ps1` reads them from the
+environment, or prompts without echo, and hands them to `scripts/sql/create_serving_logins.sql`
+hex-encoded. That is not decoration: sqlcmd substitutes a scripting variable
+*textually*, before SQL Server parses anything, so a password containing a single quote
+spliced into `N'$(WEB_PASSWORD)'` ends that literal early and turns the rest of the
+password into SQL. Quoting inside the script cannot repair damage done one layer above
+it. Hex has no character that can close a literal, so the failure is structurally
+unavailable rather than carefully avoided. The first version of the script did it the
+obvious way and broke on the first generated password, which is why the punctuation in
+these passwords is chosen to find that class of defect rather than to avoid it.
+
+`verify_serving_logins.py` connects **as each login** and tries both sides of every
+boundary, because a GRANT that ran without error says what was requested, not what was
+granted. A refusal only counts when it carries one of SQL Server's permission-denied
+codes, so an unreachable server or a wrong password is a reported failure and not a
+boundary silently banked as proved. The one exception is `DROP TABLE`, which answers
+3701 -- *"because it does not exist or you do not have permission"* -- deliberately
+conflating the two so a probe cannot map a schema it has no rights to; the check reads
+the table first, so a refusal cannot be the table simply being absent. Verified to
+fail: granting the reader `INSERT, UPDATE, DELETE, ALTER` turns four checks red and
+exits non-zero, and re-running the creation script turns them green again.
+
 The publish drops, recreates and refills every table inside one transaction, so the
-serving copy is always exactly one dbt build and never a blend of two. All fourteen
+serving copy is always exactly one dbt build and never a blend of two. All fifteen
 relations together are about nine thousand rows, which is why a full reload is
 cheaper than a merge key per table and has nowhere for a divergence to hide. The
 target schema is derived from `information_schema` and from measuring the data, so
 there is no hand-written DDL to drift from the models dbt already owns.
 
-**Run the publish on a short timer, not only after a DAG.** Five of the fourteen
+**Run the publish on a short timer, not only after a DAG.** Five of the fifteen
 relations are dbt views that read `current_timestamp` on every query, and they are
 views on purpose — `mart_current_conditions` picks the forecast hour nearest to now,
 and both window models carry a comment recording that they were tables once and
@@ -269,6 +252,31 @@ advances only when the *content* changed — a hash over every published value e
 the clock-derived ones — so a five-minute timer does not look like new data every
 five minutes. `refreshed_at` always moves, which is what distinguishes a publisher
 that is running and finding nothing new from one that has stopped.
+
+### Which SQL Server, and why that question has a wrong answer
+
+This machine has three SQL Server instances -- `MSSQLSERVER`, `SQLEXPRESS` and
+`SQLEXPRESS01` -- and all three are statically configured for port 1433. Only one can
+bind it; the others fail to start with *"Only one usage of each socket address"* and
+that message goes to the Windows System event log, not anywhere a developer is looking.
+
+`SQLSERVER_HOST=localhost` with `SQLSERVER_PORT=1433` addresses the instance by port,
+so **which database this project reaches depends on which service started first.**
+`vn_air_quality` lives on `SQLEXPRESS` (`D:\CSDL\MSSQL16.SQLEXPRESS`). Start
+`MSSQLSERVER` and it takes 1433, the publish then authenticates against a server that
+has never heard of this database, and the error reads *"Cannot open database
+vn_air_quality requested by the login. The login failed."* -- which sends the reader to
+check a password that was never wrong.
+
+```powershell
+Get-Service | Where-Object { $_.Name -like 'MSSQL*' } | Select-Object Name, Status
+Get-WinEvent -LogName System -MaxEvents 200 |
+    Where-Object { $_.Message -like '*SQLEXPRESS*' } | Select-Object -First 3 TimeCreated, Message
+```
+
+Giving each instance its own port would remove the ambiguity. That is a change to
+somebody's other coursework as well as to this project, so it is recorded here rather
+than made silently.
 
 ### Who publishes, and when
 
@@ -287,8 +295,10 @@ Register the timer once. It runs as the current user while logged on, so no pass
 is stored:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scriptsegister_publish_timer.ps1
-powershell -ExecutionPolicy Bypass -File scriptsegister_publish_timer.ps1 -Remove
+powershell -ExecutionPolicy Bypass -File scripts
+egister_publish_timer.ps1
+powershell -ExecutionPolicy Bypass -File scripts
+egister_publish_timer.ps1 -Remove
 ```
 
 It appends one line per tick to `logs\publish_to_sqlserver.log` and trims the file
@@ -312,114 +322,6 @@ on its own:
   as 1.
 - With `fast_executemany`, pyodbc ignores an aware datetime's own offset and stamps
   the client machine's onto the wall clock, storing 06:00 UTC as 06:00+07:00. The
-  values are bound as ISO-8601 text now, which both of the driver's paths read the
-  same way.
-
-## Deployment
-
-The Streamlit Community Cloud deployment target is deliberately simple: the app
-only reads a prebuilt DuckDB warehouse. There is no dbt invocation at runtime, the
-app never writes to DuckDB, and every database connection is opened with
-`read_only=True`. The warehouse is not stored in git; it is published as the
-`vn_air_quality_weather.duckdb` asset under the `demo-warehouse` release tag.
-`requirements.txt` therefore installs the project without extras: dbt, dlt and
-boto3 belong to the `etl` extra used by CI and refresh jobs, not to the deployed
-dashboard runtime.
-
-When the expected local file is absent, `dashboard/warehouse_source.py` downloads
-the release asset once during app startup, writes it through a sibling temporary
-file, and atomically moves it into place only after the download completes. When a
-local warehouse already exists, or no deploy URL is configured, the module does
-nothing and emits no local-development noise.
-
-### Refresh architecture
-
-`.github/workflows/refresh-demo-warehouse.yml` runs every six hours and performs
-the write side away from the Streamlit runtime:
-
-```text
-download release asset
-    -> add one real forecast vintage
-    -> prune old forecast vintages
-    -> dbt build
-    -> compact into the upload file
-    -> verify_streamlit.py against that exact file
-    -> replace the release asset
-```
-
-The workflow intentionally runs only the forecast pipeline, which needs no API
-key, so the workflow needs no repository secret.
-
-The prune, dbt and final compaction steps cannot be reordered:
-
-| Stage | Measured file size | Why it is in this position |
-|---|---:|---|
-| Input asset | 28.8 MB | Contains the accumulated forecast vintages before deployment pruning. |
-| Prune old vintages | 13.8 MB | Must run before dbt; otherwise analytics are still built from all 12 vintages. Raw air-quality forecast rows fall from 176,256 to 14,688, raw weather forecast rows from 29,376 to 2,448, and distinct vintages from 12 to 1. |
-| dbt build | 19.8 MB | Rebuilds analytics from the pruned raw layer, but DuckDB reuses freed pages instead of returning them to the file, so the file grows again. |
-| Final compaction | 11.5 MB | Must run after dbt to reclaim the pages left behind by the analytics rebuild. Compacting only before dbt would publish the re-inflated file. |
-
-### The filename is an invariant
-
-The asset must remain named `vn_air_quality_weather.duckdb` from the source
-warehouse through CI to the file downloaded by Streamlit. DuckDB derives a catalog
-name from the file stem and bakes that catalog qualifier into stored view
-definitions. `mart_current_conditions` and `mart_outdoor_decision_window` are
-views, so renaming the asset makes every page that reads those marts fail with
-`Catalog "..." does not exist`.
-
-For that reason, `scripts/build_deploy_warehouse.py` accepts `--output-dir`, not a
-caller-selected output filename. It always preserves the source filename and
-verifies that both views can be read after every write.
-
-### Data provenance in the deployment target
-
-The deployment target has three distinct data paths. They must not be described as
-one uniformly fresh source:
-
-- **Province forecasts:** real Open-Meteo/CAMS forecast data, refreshed every six
-  hours by CI.
-- **Observed history:** real OpenAQ observations, but frozen at the warehouse seed
-  date. CI does not run the historical pipeline because that pipeline requires an
-  API key, so this part of the asset will become progressively older.
-- **Custom location:** the **Địa điểm tùy chọn** page calls Open-Meteo directly at
-  runtime and therefore returns fresh modeled data independently of the release
-  warehouse.
-
-### Deployment configuration
-
-Community Cloud reads these names through Streamlit secrets; local shells may set
-the same names as environment variables.
-
-| Variable | Required where | Purpose |
-|---|---|---|
-| `DEMO_WAREHOUSE_URL` | Required for deployment | Direct download URL for the `demo-warehouse` release asset. |
-| `DEMO_WAREHOUSE_TOKEN` | Only when the repository is private | Bearer token used to download the private repository's release asset. It is unnecessary when the asset is public. |
-| `DUCKDB_PATH` | Local development | Overrides the local DuckDB path. When the file already exists, no release download occurs. |
-
-In Streamlit Community Cloud settings, select **Python 3.11**. The project pins
-`requires-python = ">=3.11,<3.12"` in `pyproject.toml`; choosing another Python
-version can fail dependency installation with an error that does not mention
-Python at all.
-
-### Measured deployment gate
-
-The release path was verified with the file that would be uploaded, not a different
-local warehouse:
-
-| Gate | Result |
-|---|---|
-| Ruff | clean |
-| pytest | 313 passed, 1 skipped |
-| dbt build | PASS=130, ERROR=0 |
-| Streamlit | 16/16 |
-| `verify.ps1` | exit 0 |
-
-### Deliberately not production-ready
-
-This is a public-demo deployment shape, not a production security baseline.
-Security, backup and observability have not been completed. The Alerts page is a
-preview only: it sends nothing and persists no alert history. No accuracy number is
 published because no forecast-verification fact exists; the product reports
 confidence without relabelling it as accuracy.
 

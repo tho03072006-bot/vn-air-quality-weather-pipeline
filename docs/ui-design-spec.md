@@ -1,5 +1,12 @@
 # UI design spec — Vietnam Outdoor Decision Cockpit
 
+> **Retired surface, kept as a record.** The Streamlit dashboard and the FastAPI read
+> API this document describes were removed in P6, once `../vn-air-web` replaced them.
+> Nothing below has been rewritten to match: these are findings, and editing them to
+> agree with today's code would delete the evidence along with the code. Several of
+> them are the reason the Spring application's accessibility, honesty and fidelity
+> gates exist at all. Read it as history, not as instructions.
+
 Target Streamlit version: **1.60.0** (verified via
 `python -c "import streamlit; print(streamlit.__version__)"`). Do not use APIs
 introduced after this version.

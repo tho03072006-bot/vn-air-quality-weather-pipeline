@@ -1,3 +1,33 @@
+"""The sixteen queries that read the serving marts, and the reference they are read against.
+
+This was ``dashboard/data_access.py`` for as long as the Streamlit dashboard existed.
+It outlived the dashboard, and it moved here rather than being deleted with it,
+because it stopped being a UI's data layer some time before the UI was retired: the
+Spring application's eight repositories restate every one of these queries in T-SQL,
+and ``RepositoryFidelityTests`` proves the restatement correct by comparing it against
+what these functions return.
+
+That makes this module the reference side of a cross-language equivalence check, which
+is a different job with different rules:
+
+* **These queries are not free to change.** Editing one changes the answer the Java is
+  measured against, so a change here is a change to two codebases and has to be made in
+  both. The fingerprint file is what makes the second half visible --
+  ``scripts/export_query_fingerprints.py`` regenerates it, and the Java test fails
+  loudly against a stale one rather than passing quietly.
+* **They compute nothing.** Every number is read from a mart dbt already built. Anything
+  derived belongs in dbt, where one definition serves the warehouse, the fingerprints
+  and the page at once.
+* **Every connection is read-only.** ``duckdb.connect(..., read_only=True)`` throughout,
+  because DuckDB permits many readers or one writer and this process must never be the
+  writer -- a reader that takes the lock turns into a failed 02:00 pipeline, which is
+  the hardest kind of failure to trace back to its cause.
+
+It lives in the installed package rather than in ``scripts/`` for the same reason
+``sqlserver_publish`` does: the Airflow image installs the package and not the scripts
+directory, and a module two callers share must not exist as two copies.
+"""
+
 from datetime import date, datetime
 from pathlib import Path
 

@@ -1,5 +1,12 @@
 # Implementation roadmap
 
+> **Retired surface, kept as a record.** The Streamlit dashboard and the FastAPI read
+> API this document describes were removed in P6, once `../vn-air-web` replaced them.
+> Nothing below has been rewritten to match: these are findings, and editing them to
+> agree with today's code would delete the evidence along with the code. Several of
+> them are the reason the Spring application's accessibility, honesty and fidelity
+> gates exist at all. Read it as history, not as instructions.
+
 Companion to [code-audit-and-risk-register.md](code-audit-and-risk-register.md)
 and [ui-design-spec.md](ui-design-spec.md). Status values: planned /
 in-progress / done / deferred.
