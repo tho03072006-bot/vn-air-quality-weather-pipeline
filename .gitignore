@@ -52,6 +52,12 @@ logs/
 
 # Editors and operating systems
 .vscode/
+# Visual Studio 2022 opens this repository in Folder View and writes .vs/ on
+# first open: a SQLite index and a content cache, 685 KB over 3 files here.
+# It was missing from this list while .vscode/ and .idea/ were present, so the
+# first person to open the folder in Visual Studio dirtied a tree this project
+# keeps clean on purpose.
+.vs/
 .idea/
 .DS_Store
 Thumbs.db

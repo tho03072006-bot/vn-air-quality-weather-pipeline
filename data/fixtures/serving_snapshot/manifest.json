@@ -1,0 +1,22 @@
+{
+  "snapshotId": "248ed607bdad97650d0245843fb59b0e356e1d43bee19209dc5ba0f79754f98b",
+  "pinnedClockUtc": "2026-10-11T15:42:57.404024+00:00",
+  "source": "vn_air_quality_weather.duckdb",
+  "relations": {
+    "dim_province": 34,
+    "dim_vn_aqi_category": 6,
+    "mart_current_conditions": 34,
+    "mart_location_hourly_forecast": 2448,
+    "mart_outdoor_decision_window": 170,
+    "mart_outdoor_contiguous_window": 4726,
+    "mart_city_aqi_hourly": 2400,
+    "mart_city_aqi_daily": 105,
+    "mart_city_air_quality_hourly": 3836,
+    "mart_data_coverage": 160,
+    "fct_pipeline_run": 28,
+    "mart_raw_source_health": 4,
+    "mart_forecast_vs_analysis": 36,
+    "mart_model_station_discrepancy": 12,
+    "mart_station_representativeness": 0
+  }
+}

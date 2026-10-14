@@ -32,6 +32,30 @@ x-airflow-common: &airflow-common
     # to localhost and is not production-ready. Override AIRFLOW_JWT_SECRET in .env
     # for anything that is not a local machine.
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-local-dev-shared-jwt-secret}
+    # SQLSERVER_HOST arrives from ../.env as `localhost`, which is correct on the
+    # developer's machine and wrong inside a container, where it resolves to the
+    # container itself and the publish fails with a connection refused that names
+    # a host the reader believes is running. Overridden here rather than in .env
+    # because .env is also read by the same scripts run from PowerShell, where
+    # `localhost` is right. Everything else about the connection -- database, user,
+    # password, encryption -- still comes from .env and is not restated.
+    SQLSERVER_HOST: ${SQLSERVER_HOST_FROM_CONTAINER:-host.docker.internal}
+    # The publish credential is passed through from the shell that runs compose,
+    # because it no longer lives in .env: the password is a user-scope Windows
+    # environment variable and .env leaves both fields blank on purpose. Before this
+    # line the container read those blanks through env_file and publish_serving_copy
+    # failed with "SQLSERVER_USER is required" on every run -- a regression invisible
+    # to every host-side check, because the host scripts read the variables directly.
+    # `:-` rather than `:?` so `docker compose config` and image builds still work
+    # without a SQL Server, as CI needs; scripts/preflight.ps1 is what reports them
+    # missing before the stack is started. Expected values: vn_air_publish and its
+    # password, never the read-only web login.
+    SQLSERVER_USER: ${SQLSERVER_USER:-}
+    SQLSERVER_PASSWORD: ${SQLSERVER_PASSWORD:-}
+  extra_hosts:
+    # Docker Desktop resolves host.docker.internal on its own; this makes the same
+    # compose file work on a plain Linux daemon, where it does not.
+    - "host.docker.internal:host-gateway"
   volumes:
     - ./dags:/opt/airflow/dags
     # src is mounted, not only baked into the image. PYTHONPATH points at
@@ -86,7 +110,14 @@ services:
     <<: *airflow-common
     command: api-server
     ports:
-      - "8080:8080"
+      # Host 8081, container 8080. Tomcat already owns host 8080 for vn-air-web and
+      # two other web projects, and the Hadoop lab on this machine holds 8088, so the
+      # two halves of this project could not run at the same time. Only the host side
+      # moves: every container still reaches the API at airflow-api-server:8080, which
+      # is what EXECUTION_API_SERVER_URL and the healthcheck below depend on. Set
+      # AIRFLOW_API_PORT in the environment that runs compose to choose another; note
+      # that compose interpolates from the shell and from airflow/.env, not ../.env.
+      - "${AIRFLOW_API_PORT:-8081}:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
       interval: 30s

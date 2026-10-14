@@ -7,10 +7,17 @@ Last commit at handover: see `git log -1`. Working tree clean, nothing staged.
 
 ## 1. What this is
 
-An end-to-end pipeline and dashboard for Vietnamese air quality and weather:
-hourly observations and modelled data for three cities, plus 72-hour modelled
-forecasts for all 34 province-level units, served through a Streamlit decision
-app. Local DuckDB warehouse, dbt for transformation, Airflow 3 for scheduling.
+An end-to-end pipeline for Vietnamese air quality and weather: hourly observations
+and modelled data for three cities, plus 72-hour modelled forecasts for all 34
+province-level units. Local DuckDB warehouse, dbt for transformation, Airflow 3 for
+scheduling, and fifteen serving relations republished into SQL Server every five
+minutes.
+
+**The user interface is a different repository.** `../vn-air-web` is a Spring Boot
+application, packaged as a war and deployed to Tomcat 11, that reads the SQL Server
+copy through a read-only pool. The Streamlit dashboard and the FastAPI read API that
+used to live here were removed in P6 once it replaced them; the pipeline README says
+what was lost with them, and it is not nothing.
 
 Read next: [architecture](architecture.md) for grains and keys,
 [sources and limitations](sources-and-limitations.md) for what the data can and
@@ -25,30 +32,40 @@ true when written and false when read.
 
 | Gate | Command | Result | Measured |
 |---|---|---|---|
-| Format | `ruff format --check .` | 95 files clean | 2026-08-17 |
-| Lint | `ruff check .` | pass | 2026-08-17 |
-| Unit tests | `pytest` | **344 passed, 1 skipped**, coverage 89.51% | 2026-08-17 |
-| dbt | `dbt build` | **PASS=170, ERROR=0** | 2026-08-17 |
-| Source freshness | `dbt source freshness` | pass | 2026-08-17 |
-| Dashboard | `python scripts/verify_streamlit.py` | **32/32** — 9 fresh pages + interactions + 6 exhausted + 16 on an unreadable warehouse | 2026-08-17 |
-| Layout | `verify_layout.py --skip-live-api` | **16/16** (8 pages x 2 viewports) | 2026-08-17 |
-| Contrast | `verify_a11y.py --skip-live-api` | **16/16** (8 pages x 2 viewports) | 2026-08-17 |
-| Keyboard | `verify_keyboard.py --skip-live-api` | **16/16**; 2.1.1, 2.4.7 and 2.4.3 enforced | 2026-08-17 |
-| **Deployed app** | `python scripts/verify_live_app.py` | **9/9 pages** render their own heading, none raised | 2026-08-17 |
-| Byte-compile | `compileall src dashboard api airflow/dags scripts` | exit 0 | 2026-08-17 |
+| Format | `ruff format --check .` | 67 files clean | 2026-10-14 |
+| Lint | `ruff check .` | pass | 2026-10-14 |
+| Unit tests | `pytest` | **277 passed, 1 skipped**, coverage 88.19% | 2026-10-14 |
+| dbt | `dbt build` on the demo warehouse `verify.ps1` builds | **PASS=172, ERROR=0** | 2026-10-14 |
+| Serving publish | `publish_to_sqlserver.py` | 11,548 rows, 15 relations, as `vn_air_publish` | 2026-09-08 |
+| **Permission boundary** | `verify_serving_logins.py` | **14/14** — reader refused 5 writes, writer allowed 6 operations and refused CREATE LOGIN | 2026-09-08 |
+| **Web application** | `scripts\mvn.ps1 -Offline` (in `../vn-air-web`, JDK 25) | **151 passed, 0 skipped**, including 18 fidelity comparisons against the frozen fixture | 2026-10-14 |
+| **Web, in a browser** | `scripts\verify_browser.py` (in `../vn-air-web`) | **36/36**: 9 pages × 390/1280 px × light/dark, no overflow, one h1 each | 2026-10-14 |
+| **live.js** | `node --test scripts/test-live.cjs`, `verify_live_browser.py` | **26/26**, **4/4** Chromium scenarios | 2026-10-14 |
+| **Deployed war** | 9 pages + `/live/stream` + `/actuator/health` over HTTP on Tomcat 11.0.25 | **14/14 URLs 200**, `servingDatabase: UP`, SSE `listeners: 1` | 2026-09-08 |
+| Byte-compile | `compileall src airflow/dags scripts` | exit 0 | 2026-10-14 |
 | Compose | `docker compose -f airflow/docker-compose.yml config` | exit 0 | carried forward |
 | Airflow DagBag | `airflow dags list-import-errors` | **0 import errors**, both DAGs registered | carried forward |
 | Airflow pool | `airflow pools list` | `warehouse_writer` present, **1 slot** | carried forward |
-| Airflow task code | `airflow dags test vn_air_quality_weather_forecast` | success, 4/4 tasks, 36.8s, 34/34 locations. **In-process — this does not exercise the scheduler**, see the row below and finding M | carried forward |
-| **Airflow scheduled execution** | `verify-airflow-scheduling` workflow | **success, 4/4 tasks** via `dags trigger` — the executor and Task Execution API path, on a clean GitHub runner rather than a developer machine. Whole workflow 5m28s | 2026-08-17 |
-| Whitespace | `git diff --check` | exit 0 | 2026-08-17 |
+| **Airflow scheduled execution** | the scheduler, catching up | forecast run **success** end to end to SQL Server; daily catch-up **66 runs success** after the closed-client fix (every daily run from 2026-08-19 had failed in `extract_store_and_load`) | 2026-10-14 |
 | Secret scan | `git grep` over tracked files | 2 known-benign hits | carried forward |
 
-The three browser gates were run with `--skip-live-api`, which drops the
-custom-location page because its driver enters coordinates and calls the live
-forecast API. Eight gated pages, not nine; that page remains a manual check. The
-earlier 18/18 figures in this table's history were taken without the flag and are
-not comparable.
+**The test count fell from 344 to 178, and that is the removal, not a regression.**
+166 of them tested the Streamlit pages and the FastAPI read API, and they were deleted
+in the same commit as the code they covered. The gates that remain cover the pipeline;
+the gates that replaced the deleted ones live in `../vn-air-web` and are counted in the
+row above.
+
+**Coverage fell from 89.51% to 80.78% for a mechanical reason worth knowing.**
+`serving_queries.py` moved into the measured package when it moved out of `dashboard/`,
+and it is exercised only by `test_query_fingerprints.py`, which needs a warehouse. It
+adds 86 statements at 25% coverage. The threshold is 70% and the module is not
+untested — the Java fidelity suite reads it 17 times a build — but `--cov` cannot see
+that, so the number understates it.
+
+**`ruff format --check` was already failing before P6.** `sqlserver_publish.py` and
+`verify_sqlserver_publish.py` carried formatting deviations that `ruff check` does not
+look for, so a handover reporting "Ruff clean" was true of the linter and false of the
+formatter. Both are formatted now and both commands are green.
 
 The Airflow rows are carried forward from the session that measured them. The stack
 was not brought up again here, so treat them as last-known-good rather than as
@@ -60,7 +77,8 @@ precisely to prove `redact()` strips query strings from a persisted error summar
 Recorded here so a future scan does not read them as a leak.
 
 Baseline when this work started: 82 tests, 86.40% coverage, 108 dbt checks, and a
-dashboard script that only checked for exceptions.
+dashboard script that only checked for exceptions. The dashboard is gone; the dbt
+checks are 171.
 
 ## 3. How to run it
 
@@ -70,15 +88,10 @@ cd "D:\VS Code\vn-air-quality-weather-pipeline"
 python -m pip install --upgrade --editable ".[dev,etl]"
 ```
 
-`etl` is required even for pytest: the suite imports `forecast_pipeline`,
-`pipeline` and `duckdb_loader`, whose import chains need boto3 and dlt. Use a base
-install with no extras only for the read-only dashboard runtime.
-
-Add `api` to work on the read API — `".[dev,etl,api]"`, which is what CI installs.
-Without it `tests/test_api.py` skips itself rather than failing, which keeps a
-dev-only install green and would make those tests silently never run if CI omitted
-the extra. Add `qa` for the browser gates, plus `python -m playwright install
-chromium`.
+`etl` is required even for pytest: the suite imports `forecast_pipeline`, `pipeline`
+and `duckdb_loader`, whose import chains need boto3 and dlt. There is no longer an
+extras-free runtime to install for — the `api` and `qa` extras went with the read API
+and the browser gates that used them.
 
 Everything offline, in one command — no API call, no AWS call:
 
@@ -86,53 +99,106 @@ Everything offline, in one command — no API call, no AWS call:
 .\scripts\verify.ps1
 ```
 
-The dashboard, against the real warehouse:
+### The serving database, which everything downstream depends on
+
+**Start `SQLEXPRESS`, not `MSSQLSERVER`.** Three instances on this machine are all
+statically configured for port 1433 and only one can bind it; `vn_air_quality` lives on
+`SQLEXPRESS`. Starting the wrong one produces *"Cannot open database vn_air_quality
+requested by the login. The login failed"*, which reads as a credential fault and is
+not one. See the README section *Which SQL Server, and why that question has a wrong
+answer*.
 
 ```powershell
-$env:DUCKDB_PATH = (Resolve-Path "data\warehouse\vn_air_quality_weather.duckdb").Path
-streamlit run dashboard\app.py
+Start-Service 'MSSQL$SQLEXPRESS'          # elevated
+python scripts\verify_serving_logins.py   # 14 checks; proves the two logins are minimal
+python scripts\publish_to_sqlserver.py
+python scripts\verify_sqlserver_publish.py
 ```
 
-Run Streamlit **from the project root**. Streamlit reads `.streamlit/config.toml`
-relative to the working directory, so launching from elsewhere silently drops the
-theme.
+Credentials come from the environment, not from `.env`:
+`SQLSERVER_USER=vn_air_publish` and `SQLSERVER_PASSWORD` set to the value in
+`VN_AIR_PUBLISH_PASSWORD`. Create or rotate both logins with
+`scripts\create_serving_logins.ps1 -Persist`.
 
-Refresh the data:
+The five-minute republish runs as the scheduled task `VN Air - publish serving marts`.
+Confirm it is `Ready` and not `Disabled` before concluding the data is stale:
+
+```powershell
+Get-ScheduledTask -TaskName 'VN Air - publish serving marts' | Select-Object TaskName, State
+powershell -ExecutionPolicy Bypass -File scripts\register_publish_timer.ps1
+```
+
+### Refresh the data
 
 ```powershell
 python -m vn_air_quality_weather.forecast_pipeline --all-provinces
 python -m vn_air_quality_weather.pipeline --date 2026-08-07
 ```
 
-Both run `dbt build` at the end. The forecast run needs no API key; the historical
-run reads `OPENAQ_API_KEY` from `.env`.
+Both run `dbt build` at the end. The forecast run needs no API key; the historical run
+reads `OPENAQ_API_KEY` from `.env`.
 
-Airflow:
+### The fingerprints the web application is measured against
+
+Both sides read one **frozen snapshot**, never the live warehouse or serving copy.
+`data/fixtures/serving_snapshot/` holds the serving marts materialised in a single
+DuckDB transaction at a pinned clock; the real publisher loads it into the isolated
+database `vn_air_quality_fidelity`, and the fingerprints are exported from the same
+snapshot. The five-minute timer and the hour turning therefore cannot change the
+expected values. Fingerprints are per column and per row (a digest keyed by each
+query's natural key), with floats canonicalised identically in Python and Java
+(exact binary value, HALF_EVEN, six places).
 
 ```powershell
-docker compose -f airflow\docker-compose.yml build
+sqlcmd -S tcp:localhost,1433 -E -C -b -i scripts\sql\create_fidelity_fixture_db.sql   # once
+python scripts\export_query_fingerprints.py --load-fixture-db --out ..\vn-air-web\src\test\resources\query_fingerprints.json
+cd ..\vn-air-web ; powershell -ExecutionPolicy Bypass -File scripts\mvn.ps1 -Offline
+```
+
+Add `--refresh-snapshot` to the export when a query in
+`src/vn_air_quality_weather/serving_queries.py` or a serving mart changes: it rebuilds
+the snapshot from the warehouse at a new pinned clock. The loader accepts only the
+literal database name `vn_air_quality_fidelity`.
+
+### Airflow
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\preflight.ps1   # read-only; prints the fix for each FAIL
 docker compose -f airflow\docker-compose.yml up airflow-init
 docker compose -f airflow\docker-compose.yml up -d
+powershell -ExecutionPolicy Bypass -File scripts\verify_airflow_scheduling.ps1
 ```
 
-After every push that reaches the deployment:
+The UI is at http://localhost:8081 — host 8081, because Tomcat holds 8080. Run compose
+from a shell opened after the publish credential was set: the containers receive
+`SQLSERVER_USER`/`SQLSERVER_PASSWORD` from that shell, not from `.env`.
 
-```powershell
-python scripts\verify_live_app.py
-```
+**Expect the forecast DAG to run on its own as soon as the scheduler is back.** It is
+unpaused. On 2026-10-11, after eight weeks down, the scheduler first finished a run left
+`running` since 2026-08-16 and then ran the 12:00 UTC interval, before a triggered run
+could start. Each publishes, so `version_id` advances more than once.
 
-If it reports `ImportError` on exactly the pages whose import list changed, the code
-arrived and the process did not restart — open **Manage app** on
-<https://vn-air-quality-weather.streamlit.app/> and choose **Reboot app**, then run
-the check again. This is a required step, not a troubleshooting one: see the first
-trap in §6.
+**Open risk: the five-minute timer and a DAG can touch the warehouse at once.** The DAG
+writes DuckDB inside the Docker VM; the timer reads the same file from Windows. The
+single-slot `warehouse_writer` pool serialises tasks inside Airflow only, and nothing here
+has shown whether DuckDB's file lock holds across the bind mount. On 2026-10-11 the timer
+was kept disabled until the triggered run finished, and a backup of the warehouse was
+taken first; in steady state the forecast DAG runs every six hours while the timer runs
+every five minutes, so they will overlap eventually. Untested, not known to be safe.
 
-For a one-off daily-DAG test of data date `2026-08-07`, pass the following
-interval end (not the data date) as the logical date:
+For a one-off daily-DAG test of data date `2026-08-07`, pass the following interval end
+(not the data date) as the logical date:
 
 ```powershell
 docker compose -f airflow\docker-compose.yml exec airflow-scheduler airflow dags test vn_air_quality_weather_daily 2026-08-08T02:00:00+00:00
 ```
+
+### The web application
+
+Its own README carries the deployment steps. In short: `mvn clean package`, copy the war
+to `D:\WEB\apache-tomcat-11.0.25-windows-x64\apache-tomcat-11.0.25\webapps\`, and start
+Tomcat. Credentials reach it through `bin\setenv.bat`, which maps `SQLSERVER_USER` and
+`SQLSERVER_PASSWORD` onto the read-only login without containing the password itself.
 
 ## 4. What was fixed, and how it was proved
 
@@ -252,6 +318,51 @@ target; it runs locally against a warehouse and is not exposed anywhere.
 
 ## 6. Traps that cost time here
 
+The four below were paid for in P6 and are the ones most likely to be met again.
+
+**Three SQL Server instances share port 1433, and `.env` addresses the port.**
+`MSSQLSERVER`, `SQLEXPRESS` and `SQLEXPRESS01` are all statically configured for 1433.
+Whichever starts first binds it; the others die with *"Only one usage of each socket
+address"* in the Windows **System** event log, not in any SQL Server log. Because the
+connection is addressed by port rather than by instance name, starting the wrong one
+silently points the whole pipeline at a server that has never held this database, and
+the error names the login. `vn_air_quality` is on `SQLEXPRESS`.
+
+**A `\v` in a Windows path can become a vertical tab, in a committed file.** Writing
+`scripts\verify.ps1` through a layer that interprets backslash escapes produces
+`scripts` + U+000B + `erify.ps1`. It renders almost correctly in a terminal, so it
+survives review; it does not survive being copied and run. The README reached `HEAD`
+with one such line in it. `git grep` will not find it by the text you expect, because
+the text you expect is not there. Scan for the bytes:
+
+```powershell
+Select-String -Path *.md, docs\*.md -Pattern "[\x07\x08\x0b\x0c]"
+```
+
+Beware, too, of writing the scanner with `str.splitlines()`: Python treats vertical tab
+and form feed as line boundaries, so the characters being hunted are consumed as
+separators and the scan reports clean on exactly the corruption it exists to find. Use
+`split("\n")`.
+
+**sqlcmd substitutes scripting variables textually, before SQL Server parses.** A
+password containing a single quote, spliced into `N'$(PASSWORD)'`, closes that literal
+early and the remainder becomes SQL. `QUOTENAME` further down cannot help, because the
+damage is done one layer above it. `create_serving_logins.ps1` passes the password
+hex-encoded so that no character in transit can end a literal.
+
+**A URL literal in JavaScript is right until the war is deployed.** `live.js` held
+`new EventSource('/live/stream')`. Under `mvn spring-boot:run` the application owns the
+root and that is correct; under Tomcat it is deployed at `/vn-air-web` and the request
+404s. Nothing logs an error — from Tomcat's side a request for a path no application
+claims is an ordinary 404 — and the only symptom is a live indicator that never leaves
+"Đang kết nối…". Every test in that project started its own server at the root, where a
+context-aware URL and a hard-coded one are the same string, so no test could tell them
+apart. `ContextPathTests` now runs the application under a deliberately unrelated
+context path; it fails 3/3 against the pre-fix code.
+
+### Earlier traps, still true
+
+
 Recorded so they do not cost it twice.
 
 - **Streamlit caches imported modules.** Editing a library module and reloading the
@@ -363,48 +474,47 @@ Recorded so they do not cost it twice.
 
 In order:
 
-1. **Re-ingest observed history so the decomposition has real numbers.** The finding O
-   split is built and all three terms are measured — but only on the CI fixture.
-   Measured on the development warehouse on 2026-08-18, read-only: both new marts are
-   **absent** rather than empty, because dbt has not been run there since they were
-   added; `raw.air_quality_hourly` has no `station_latitude` column; and
-   `raw.air_quality_at_station_hourly` does not exist.
+1. **Decide whether the read API comes back.** P6 removed `api/main.py` and nothing
+   replaced it: vn-air-web serves HTML and one status endpoint, so there is no
+   machine-readable view of these marts at all. Anything that wants the numbers now
+   needs a SQL Server credential, which is a worse boundary than the one that was
+   removed. Rebuilding it in Spring is the obvious route; the contract it must keep is
+   recorded in the pipeline README under *The user interface, and where it went*, and
+   the rule that outranks the rest is that `mart_model_station_discrepancy` is never
+   served and no accuracy figure is ever published.
 
-   A `dbt build` there will create `mart_forecast_vs_analysis` with real numbers,
-   because that term needs no new ingestion. `mart_station_representativeness` will
-   build and stay empty: its staging model compiles to a typed empty set when the raw
-   table is absent, which is the behaviour `tests/test_legacy_raw_schema.py` pins.
-
-   Rows loaded before `b191358` carry no station coordinates and never will —
-   backfilling them would mean rewriting immutable raw history to look like something
-   it was not. One historical run gives future rows their positions, and it needs
-   `OPENAQ_API_KEY`:
+2. **Re-ingest observed history so the decomposition has real numbers.** Unchanged by
+   P6. The finding O split is built and all three terms are measured, but only on the
+   CI fixture. Rows loaded before `b191358` carry no station coordinates and never
+   will — backfilling them would mean rewriting immutable raw history to look like
+   something it was not. One historical run gives future rows their positions, and it
+   needs `OPENAQ_API_KEY`:
 
    ```powershell
    python -m vn_air_quality_weather.pipeline --date <a date already ingested>
    ```
 
-   The station-CAMS fetch itself needs no key — Open-Meteo is open — so once
-   coordinates exist, `start_date`/`end_date` can backfill the model side over the
-   window that already has pairs.
    **The trap to carry forward:** the decomposition attributes the gap; it does not
    measure accuracy. Forecast drift near 1.0 means the forecast agrees with the model,
-   not that the model is right, and a model offset by 3.9× produces a faithful
-   forecast offset by 3.9×. The offset term is measured against one station per city
-   in two cities and says nothing about the other thirty-two provinces.
-2. **Decide whether the deployment should reload its warehouse.** Pipeline health now
-   shows that the served file and the published asset can diverge; nothing acts on it.
-   The options and the constraints that must hold — `read_only=True`, atomic writes,
-   and the load-bearing filename — are in the register under finding N's neighbours.
-3. Single-source the duplicated promises. Finding P records the pattern: the same
-   claim lives in `methodology.py` and in Trust's own container, and the gate now
-   locks both copies without merging them.
-4. Thin spots that remain in the gates: `verify_layout.py` covers no tablet width,
-   the browser gates skip the custom-location page whenever `--skip-live-api` is set,
-   and typography has never been checked by eye or by measurement.
+   not that the model is right, and a model offset by 3.9x produces a faithful forecast
+   offset by 3.9x. The offset term is measured against one station per city in two
+   cities and says nothing about the other thirty-two provinces.
 
-Empty and error states are no longer on this list: `verify_streamlit.py` now drives
-every warehouse-reading page against an absent warehouse and an empty one.
+3. **Give the three SQL Server instances distinct ports.** The port collision is
+   documented rather than fixed, because two of those instances belong to other work on
+   this machine. Until then, every deployment starts by checking which instance owns
+   1433.
+
+4. **Decide whether `sa` should be disabled.** Neither project uses it any more. It was
+   left enabled deliberately: `NovaShopDb` and `webst2` share this instance and may
+   still authenticate with it, so disabling it is a decision about other projects, not
+   this one.
+
+5. **The web application is not deployed anywhere but this machine.** It runs on a local
+   Tomcat at `http://localhost:8080/vn-air-web/`. The public Streamlit deployment that
+   used to exist was retired with the dashboard, so there is currently no public
+   surface. Restoring one is a deployment task, not a revert.
 
 Open findings and their status are in
-[code-audit-and-risk-register.md](code-audit-and-risk-register.md).
+[code-audit-and-risk-register.md](code-audit-and-risk-register.md), whose header now
+says which of them describe a surface that no longer exists.

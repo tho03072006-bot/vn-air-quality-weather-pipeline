@@ -10,7 +10,8 @@ Airflow data interval (UTC day)
   -> dlt merge into DuckDB raw.weather_hourly and raw.air_quality_hourly
   -> dlt merge of one audit row into raw.pipeline_runs
   -> dbt staging -> intermediate -> dimensions/facts -> analytics marts
-  -> Streamlit scheduled views read analytics marts
+  -> publish 15 relations into SQL Server
+  -> vn-air-web (Spring/Thymeleaf on Tomcat) reads the serving copy
 ```
 
 The six-hour forecast path queries two Open-Meteo endpoints for the 34 province
@@ -23,7 +24,7 @@ The on-demand path is intentionally separate:
 submitted Vietnam place name or WGS84 coordinate
   -> Open-Meteo Geocoding (place search only)
   -> Open-Meteo weather + CAMS air-quality forecast
-  -> bounded Streamlit cache (15 minutes, maximum 128 forecast entries)
+  -> answered in the vn-air-web process, cached nowhere and written nowhere
   -> temporary joined/scored dataframe
 ```
 
@@ -59,7 +60,7 @@ Custom-location results are always `source_type=modeled` and
 ## Time contract
 
 All extraction windows and warehouse timestamps are UTC. Business dates and
-dashboard labels use `Asia/Ho_Chi_Minh` (+07:00). VN_AQI daily assigns the
+page labels use `Asia/Ho_Chi_Minh` (+07:00). VN_AQI daily assigns the
 01:00–00:00 local window with `vietnam_aqi_business_date`. Joins use location
 plus UTC hour, never an unqualified timestamp alone.
 
@@ -107,7 +108,7 @@ Documented interpretation choices:
 - The decision does not state a minimum completeness for the rolling 8-hour
   ozone mean; this project requires at least six of the eight hours.
 - `is_publishable` encodes muc 2.1: without PM10 or PM2.5 the index must not be
-  published, and the dashboard filters on it.
+  published, and the serving queries filter on it.
 - The decision is written for validated continuous-monitoring stations. CAMS
   rows are modeled, so any VN_AQI computed from them is an estimate and is
   labelled as such.

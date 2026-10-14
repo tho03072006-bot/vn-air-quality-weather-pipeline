@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -198,10 +199,15 @@ def run_day(
     observed_records: list[ObservedAirQualityHourly] = []
     raw_counts = _RawObjectCounts()
 
-    with OpenMeteoClient(
-        timeout_seconds=settings.http_timeout_seconds,
-        retry_policy=retry_policy,
-    ) as open_meteo:
+    # One scope for both clients: the OpenAQ pass samples the model at each station
+    # through the Open-Meteo client, so that client must outlive the anchor fetch.
+    with ExitStack() as clients:
+        open_meteo = clients.enter_context(
+            OpenMeteoClient(
+                timeout_seconds=settings.http_timeout_seconds,
+                retry_policy=retry_policy,
+            )
+        )
         for city in CITIES.values():
             LOGGER.info("extract source=open_meteo_weather city=%s date=%s", city.key, data_date)
             weather_payload = open_meteo.fetch_weather(city, data_date)
@@ -257,12 +263,14 @@ def run_day(
             )
             raw_counts.record(write_result)
 
-    if include_openaq:
-        with OpenAQClient(
-            settings.require_openaq_api_key(),
-            timeout_seconds=settings.http_timeout_seconds,
-            retry_policy=retry_policy,
-        ) as open_aq:
+        if include_openaq:
+            open_aq = clients.enter_context(
+                OpenAQClient(
+                    settings.require_openaq_api_key(),
+                    timeout_seconds=settings.http_timeout_seconds,
+                    retry_policy=retry_policy,
+                )
+            )
             for city in CITIES.values():
                 LOGGER.info("discover source=openaq city=%s", city.key)
                 locations_payload = open_aq.fetch_locations(city, settings.openaq_radius_meters)

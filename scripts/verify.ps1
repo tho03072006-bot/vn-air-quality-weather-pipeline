@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Ruff format check, Ruff lint, pytest with coverage, compileall for the
-    Airflow DAG and dashboard, a deterministic demo warehouse, dbt build, and
-    dbt source freshness. No real API call and no AWS call is made, so this is
+    package, the Airflow DAG and the scripts, a deterministic demo warehouse,
+    dbt build, and dbt source freshness. No real API call and no AWS call is made, so this is
     safe to run at any time. Stops at the first failing gate and reports which
     one failed.
 
@@ -63,11 +63,10 @@ try {
     Invoke-Gate 'ruff check' { & $Python -m ruff check . }
     Invoke-Gate 'pytest' { & $Python -m pytest }
     Invoke-Gate 'compileall' {
-        # Every top-level package, and `api` belongs in the same breath as the others.
         # The list here and the one in ci.yml are two copies of one fact; adding a
         # package to one and not the other is how this project has already broken CI
         # once, so change them together.
-        & $Python -m compileall -q src dashboard api airflow/dags scripts
+        & $Python -m compileall -q src airflow/dags scripts
     }
 
     if (-not $SkipDbt) {
@@ -87,7 +86,6 @@ try {
 
         $env:DUCKDB_PATH = (Resolve-Path $databasePath).Path
         Invoke-Gate 'dbt build' { & $Dbt build --project-dir dbt --profiles-dir dbt }
-        Invoke-Gate 'Streamlit AppTest' { & $Python scripts/verify_streamlit.py }
         if (-not $SkipFreshness) {
             Invoke-Gate 'dbt source freshness' {
                 & $Dbt source freshness --project-dir dbt --profiles-dir dbt
