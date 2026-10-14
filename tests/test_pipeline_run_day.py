@@ -16,11 +16,25 @@ DATA_DATE = date(2026, 7, 27)
 HOURS = ["2026-07-27T00:00", "2026-07-27T01:00", "2026-07-27T02:00"]
 
 
-class FakeOpenMeteoClient:
+class _ClosesLikeHttpx:
+    """Refuse calls after __exit__, as httpx does once its client is closed."""
+
+    closed = False
+
+    def _ensure_open(self) -> None:
+        if self.closed:
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
+
+    def __exit__(self, *_: object) -> None:
+        self.closed = True
+
+
+class FakeOpenMeteoClient(_ClosesLikeHttpx):
     def __init__(self, **_: Any) -> None:
         self.weather_calls: list[str] = []
 
     def fetch_weather(self, city: City, data_date: date) -> dict[str, Any]:
+        self._ensure_open()
         self.weather_calls.append(city.key)
         return {
             "latitude": city.latitude,
@@ -36,6 +50,7 @@ class FakeOpenMeteoClient:
         }
 
     def fetch_modeled_air_quality(self, city: City, data_date: date) -> dict[str, Any]:
+        self._ensure_open()
         return {
             "latitude": city.latitude,
             "longitude": city.longitude,
@@ -51,32 +66,33 @@ class FakeOpenMeteoClient:
     def __enter__(self) -> "FakeOpenMeteoClient":
         return self
 
-    def __exit__(self, *_: object) -> None:
-        return None
 
+class FakeOpenAQClient(_ClosesLikeHttpx):
+    # Real OpenAQ locations carry coordinates; the default fake omits them so the
+    # counts in the older tests stay as they were. The station test switches them on.
+    station_coordinates: dict[str, float] | None = None
 
-class FakeOpenAQClient:
     def __init__(self, api_key: str, **_: Any) -> None:
         assert api_key == "unit-test-key"
 
     def fetch_locations(self, city: City, radius_meters: int) -> dict[str, Any]:
+        self._ensure_open()
         if city.key != "hanoi":
             return {"meta": {"found": 0}, "results": []}
-        return {
-            "meta": {"found": 1},
-            "results": [
-                {
-                    "id": 9001,
-                    "name": "Fake Hanoi station",
-                    "datetimeLast": {"utc": "2026-07-27T23:00:00Z"},
-                    "sensors": [{"id": 55, "parameter": {"name": "pm25"}}],
-                }
-            ],
+        location: dict[str, Any] = {
+            "id": 9001,
+            "name": "Fake Hanoi station",
+            "datetimeLast": {"utc": "2026-07-27T23:00:00Z"},
+            "sensors": [{"id": 55, "parameter": {"name": "pm25"}}],
         }
+        if self.station_coordinates is not None:
+            location["coordinates"] = self.station_coordinates
+        return {"meta": {"found": 1}, "results": [location]}
 
     def fetch_sensor_hours(
         self, sensor_id: int, interval_start: datetime, interval_end: datetime
     ) -> dict[str, Any]:
+        self._ensure_open()
         return {
             "meta": {"returned": 2},
             "results": [
@@ -92,9 +108,6 @@ class FakeOpenAQClient:
 
     def __enter__(self) -> "FakeOpenAQClient":
         return self
-
-    def __exit__(self, *_: object) -> None:
-        return None
 
 
 class MemoryRawStore:
@@ -206,6 +219,34 @@ def test_run_day_can_skip_openaq(
 
     assert summary.observed_air_quality_rows == 0
     assert summary.raw_objects == 6
+
+
+def test_station_with_coordinates_is_sampled_while_the_model_client_is_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stubbed_clients: None
+) -> None:
+    # Every scheduled daily run from 2026-08-19 failed here: the at-station model
+    # sample ran after the Open-Meteo client had been closed. The older fakes had no
+    # station coordinates and never closed, so the path was never exercised.
+    monkeypatch.setenv("DLT_DATA_DIR", str(tmp_path / "dlt-state"))
+    monkeypatch.setattr(
+        FakeOpenAQClient, "station_coordinates", {"latitude": 21.02, "longitude": 105.84}
+    )
+    store = MemoryRawStore()
+
+    summary = pipeline_module.run_day(
+        DATA_DATE,
+        settings=_settings(tmp_path),
+        raw_store=store,
+        run_id="station-run",
+    )
+
+    station_writes = [
+        write for write in store.writes if write["source"] == "open_meteo_air_quality_at_station"
+    ]
+    assert len(station_writes) == 1
+    assert station_writes[0]["city_key"] == "hanoi__9001"
+    assert summary.raw_objects == 11
+    assert summary.observed_air_quality_rows == 2
 
 
 def test_date_range_rejects_reversed_bounds() -> None:
