@@ -52,8 +52,9 @@ a second language, free to disagree with the first. dbt stays the only place tha
 logic lives.
 
 Because the clock moves every run, `version_id` advances only when the *content*
-changes: a hash is taken over every published value except the clock-derived ones,
-so a reader waiting on a new version is woken by new data and not by the timer.
+changes: a hash excludes the continuously moving ages and `as_of_utc`, so a reader
+is not woken by every timer tick. Freshness and exhausted-horizon transitions are
+included: they change whether the same readings are safe to present as current.
 
 Credentials come from the environment or `.env` and never from this file. See
 `Settings.require_sqlserver_odbc`.
@@ -147,16 +148,9 @@ SERVING_RELATIONS: tuple[Relation, ...] = (
     Relation("mart_station_representativeness", ("station_id", "pollutant")),
 )
 
-# Columns whose value is a reading of the clock rather than a fact about the air.
-# They are published -- a reader needs them -- but they are excluded from the content
-# hash, so a republish that only moved the clock does not look like new data, and
-# excluded from the strict half of the verification, where they can never match
-# across two reads taken seconds apart.
-#
-# Everything else that moves with time is deliberately *not* here. When the hour
-# turns, `mart_current_conditions` selects a different forecast row and
-# `mart_outdoor_decision_window` drops an elapsed hour: those are content changes a
-# reader should be woken for, and the hash is what notices them.
+# Clock-dependent values cannot be compared strictly by the value/fingerprint gates
+# across source reads taken at different instants. Keep this set for those gates:
+# even discrete freshness or expiry states can cross a boundary between two reads.
 CLOCK_DERIVED_COLUMNS = frozenset(
     {
         "as_of_utc",
@@ -166,6 +160,13 @@ CLOCK_DERIVED_COLUMNS = frozenset(
         "freshness_status",
     }
 )
+
+# Versioning has a different promise from cross-database value verification. Ages
+# and as_of move on every tick, but FRESH -> STALE and an exhausted horizon change
+# the advice a reader may use, even if every concentration stayed identical. Those
+# states must wake open pages. Forecast-row changes and elapsed outdoor hours are
+# also content and remain included, just as before.
+VERSION_EXCLUDED_COLUMNS = frozenset({"as_of_utc", "data_age_minutes", "forecast_age_minutes"})
 
 VERSION_TABLE = "warehouse_version"
 
@@ -518,7 +519,7 @@ def canonical(value: Any) -> str:
 
 
 def content_hash(plans: list[TablePlan]) -> str:
-    """Hash everything published except the clock, so a timer tick is not new data.
+    """Hash readings and usable-data states, excluding continuously moving ages.
 
     Rows are sorted before hashing: DuckDB is free to return an unordered relation in
     a different order between reads, and an order-sensitive hash would report new
@@ -527,7 +528,7 @@ def content_hash(plans: list[TablePlan]) -> str:
 
     digest = hashlib.sha256()
     for plan in plans:
-        keep = [i for i, c in enumerate(plan.columns) if c.name not in CLOCK_DERIVED_COLUMNS]
+        keep = [i for i, c in enumerate(plan.columns) if c.name not in VERSION_EXCLUDED_COLUMNS]
         digest.update(plan.name.encode())
         for line in sorted("\x1f".join(canonical(row[i]) for i in keep) for row in plan.rows):
             digest.update(b"\x1e")
@@ -669,12 +670,24 @@ def read_plans(duckdb_path: Path) -> list[TablePlan]:
     Read-only and short-lived. The warehouse belongs to whichever process is writing
     it, and this one is never that process -- but DuckDB lets a reader block a writer,
     so in Airflow this work still holds the single-slot warehouse pool.
+
+    One source transaction pins current_timestamp for every serving view. Without
+    it, separate autocommit reads can straddle an hour or expiry boundary and publish
+    tables that disagree about which forecast hour is current. The transaction ends
+    before the SQL Server transaction starts; the target publish remains atomic.
     """
 
     if not duckdb_path.exists():
         raise FileNotFoundError(f"No warehouse at {duckdb_path}")
     with duckdb.connect(str(duckdb_path), read_only=True) as connection:
-        return build_plans(connection)
+        connection.begin()
+        try:
+            plans = build_plans(connection)
+        except Exception:
+            connection.rollback()
+            raise
+        connection.commit()
+        return plans
 
 
 def publish_serving_marts(

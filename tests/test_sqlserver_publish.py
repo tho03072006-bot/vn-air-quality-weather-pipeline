@@ -1,7 +1,8 @@
 """Unit tests for the DuckDB to SQL Server publish path.
 
-Everything here is pure: the quoting, the type resolution, the value guards and the
-content hash. The parts that need a live SQL Server are covered by
+Quoting, type resolution, value guards and the content hash are pure. The source
+snapshot check reads views from an isolated temporary DuckDB database. No test here
+connects to SQL Server; the parts that need a live SQL Server are covered by
 `scripts/verify_sqlserver_publish.py`, which compares the two databases against each
 other rather than against a mock.
 
@@ -14,9 +15,12 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+from pathlib import Path
 
+import duckdb
 import pytest
 
+from vn_air_quality_weather import sqlserver_publish
 from vn_air_quality_weather.settings import Settings
 from vn_air_quality_weather.sqlserver_publish import (
     CLOCK_DERIVED_COLUMNS,
@@ -30,6 +34,7 @@ from vn_air_quality_weather.sqlserver_publish import (
     create_table_sql,
     duck,
     mssql,
+    read_plans,
     resolve_varchar_type,
     to_parameter,
 )
@@ -230,8 +235,61 @@ def test_row_order_does_not_change_the_content_hash() -> None:
     assert content_hash([forward]) == content_hash([backward])
 
 
+def test_swapping_readings_between_locations_changes_the_content_hash() -> None:
+    """Equal row counts and aggregate values do not imply equal serving content."""
+
+    stamp = dt.datetime(2026, 9, 5, 16, 3, tzinfo=dt.UTC)
+    first = plan((("hanoi", 13.7, stamp), ("hue", 8.3, stamp)))
+    swapped = plan((("hanoi", 8.3, stamp), ("hue", 13.7, stamp)))
+    assert content_hash([first]) != content_hash([swapped])
+
+
+@pytest.mark.parametrize(
+    ("column", "kind", "sql_type", "before", "after"),
+    [
+        ("freshness_status", "VARCHAR", "nvarchar(128)", "FRESH", "DELAYED"),
+        ("freshness_status", "VARCHAR", "nvarchar(128)", "DELAYED", "STALE"),
+        ("is_forecast_horizon_exhausted", "BOOLEAN", "bit", False, True),
+    ],
+)
+def test_clock_state_transitions_change_the_content_hash(
+    column: str, kind: str, sql_type: str, before: object, after: object
+) -> None:
+    """The same air reading becomes different advice when its usable state changes."""
+
+    columns = (
+        Column("location_key", "VARCHAR", "nvarchar(128)"),
+        Column("pm25_ugm3", "DOUBLE", "float(53)"),
+        Column(column, kind, sql_type),
+    )
+    relation = Relation("mart_current_conditions", ("location_key",))
+    first = TablePlan(relation, columns, (("hanoi", 13.7, before),))
+    second = TablePlan(relation, columns, (("hanoi", 13.7, after),))
+    assert content_hash([first]) != content_hash([second])
+
+
+def test_all_continuously_moving_clock_columns_leave_the_content_hash_unchanged() -> None:
+    columns = (
+        Column("location_key", "VARCHAR", "nvarchar(128)"),
+        Column("as_of_utc", "TIMESTAMP WITH TIME ZONE", "datetimeoffset(6)"),
+        Column("data_age_minutes", "BIGINT", "bigint"),
+        Column("forecast_age_minutes", "BIGINT", "bigint"),
+        Column("freshness_status", "VARCHAR", "nvarchar(128)"),
+        Column("is_forecast_horizon_exhausted", "BOOLEAN", "bit"),
+    )
+    relation = Relation("mart_current_conditions", ("location_key",))
+    stamp = dt.datetime(2026, 9, 5, 16, 3, tzinfo=dt.UTC)
+    first = TablePlan(relation, columns, (("hanoi", stamp, 1, 3, "FRESH", False),))
+    second = TablePlan(
+        relation,
+        columns,
+        (("hanoi", stamp + dt.timedelta(minutes=5), 6, 8, "FRESH", False),),
+    )
+    assert content_hash([first]) == content_hash([second])
+
+
 def test_freshness_columns_are_all_declared_clock_derived() -> None:
-    """The four columns mart_current_conditions derives from its own clock reading."""
+    """Cross-database value gates still account for all five clock-derived columns."""
 
     assert {
         "as_of_utc",
@@ -240,6 +298,41 @@ def test_freshness_columns_are_all_declared_clock_derived() -> None:
         "freshness_status",
         "is_forecast_horizon_exhausted",
     } == set(CLOCK_DERIVED_COLUMNS)
+
+
+# --- source snapshot ---------------------------------------------------------
+
+
+def test_serving_views_share_one_source_transaction_and_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transaction ID makes this discriminate without sleeping or racing a clock.
+
+    Both views expose current_timestamp just as the serving marts do. Autocommit
+    gives their SELECTs distinct transaction IDs even when execution is very fast;
+    one explicit transaction gives one ID and exactly one clock instant.
+    """
+
+    database = tmp_path / "snapshot.duckdb"
+    relations = (
+        Relation("mart_clock_first", ("location_key",)),
+        Relation("mart_clock_second", ("location_key",)),
+    )
+    with duckdb.connect(str(database)) as connection:
+        connection.execute("create schema analytics")
+        for relation in relations:
+            connection.execute(
+                f"create view analytics.{duck(relation.name)} as "
+                "select 'hanoi' as location_key, current_timestamp as as_of_utc, "
+                "cast(txid_current() as bigint) as snapshot_id"
+            )
+    monkeypatch.setattr(sqlserver_publish, "SERVING_RELATIONS", relations)
+
+    plans = read_plans(database)
+
+    assert [p.name for p in plans] == [r.name for r in relations]
+    assert plans[0].rows[0][2] == plans[1].rows[0][2], "source reads used different transactions"
+    assert plans[0].rows[0][1] == plans[1].rows[0][1], "serving views used different clocks"
 
 
 # --- generated DDL -----------------------------------------------------------
@@ -279,7 +372,7 @@ def base_settings(**overrides: object) -> Settings:
         "sqlserver_password": "s3cret",
     }
     values.update(overrides)
-    return Settings(**values)  # type: ignore[arg-type]
+    return Settings(_env_file=None, **values)  # type: ignore[arg-type]
 
 
 def test_connection_string_matches_the_driver_18_shape() -> None:
