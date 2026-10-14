@@ -155,7 +155,9 @@ models:
         data_tests: [not_null]
 
   - name: dim_vn_aqi_category
-    description: Bang 1, 4 and 5 of Quyet dinh 1459/QD-TCMT.
+    description: >
+      Bảng 1, 4 và 5 của Quyết định 1459/QĐ-TCMT. Vietnamese names and guidance keep
+      their diacritics; assert_vn_aqi_category_vietnamese fails the build otherwise.
     columns:
       - name: band_index
         data_tests: [unique, not_null]
