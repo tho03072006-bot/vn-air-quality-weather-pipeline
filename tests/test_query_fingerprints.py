@@ -33,6 +33,7 @@ from scripts.export_query_fingerprints import (
     read_manifest,
     row_digest,
     row_key,
+    snapshot_id,
 )
 from vn_air_quality_weather.serving_queries import load_location_forecast
 
@@ -407,6 +408,26 @@ def test_the_committed_snapshot_fingerprints_the_same_way_twice(tmp_path: Path) 
     assert documents[0] == documents[1]
     assert documents[0]["snapshot"]["id"] == read_manifest(SNAPSHOT_DIR)["snapshotId"]
     assert all(query["rowCount"] > 0 for query in documents[0]["queries"].values())
+
+
+@pytest.mark.parametrize("zone", ["UTC", "Asia/Ho_Chi_Minh", "America/New_York"])
+def test_the_snapshot_id_does_not_depend_on_the_machines_time_zone(
+    tmp_path: Path, zone: str
+) -> None:
+    """The committed id held on the +07:00 machine that wrote it and failed on CI at UTC.
+
+    DuckDB spells a TIMESTAMPTZ in the session's TimeZone, which it takes from the
+    machine, so the same rows hashed to two ids. Twice on one machine could not see it;
+    three zones in one session can.
+    """
+
+    database = tmp_path / "imported.duckdb"
+    import_snapshot(SNAPSHOT_DIR, database)
+    with duckdb.connect(str(database)) as connection:
+        connection.execute("SET TimeZone = ?", [zone])
+        assert snapshot_id(connection) == read_manifest(SNAPSHOT_DIR)["snapshotId"]
+        # The caller's setting is left as it was.
+        assert connection.execute("select current_setting('TimeZone')").fetchone()[0] == zone
 
 
 class _Recorder:

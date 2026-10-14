@@ -262,28 +262,36 @@ def snapshot_id(connection: duckdb.DuckDBPyConnection) -> str:
     the data must not move when the comparison's spelling rules do: the first version
     hashed canonical values, so correcting how a double is rounded would have invalidated
     every committed snapshot without a single row changing. DuckDB's spelling depends
-    only on the value and the DuckDB version, and a version change failing this check
-    loudly is the right outcome.
+    on the value, the DuckDB version -- a version change failing this check loudly is
+    the right outcome -- and, for TIMESTAMPTZ, on the session's TimeZone, which DuckDB
+    takes from the machine. The id is therefore computed in UTC: a snapshot committed
+    from a machine at +07:00 hashed differently on a CI runner at UTC, with every row
+    identical. The caller's TimeZone is restored afterwards.
     """
 
-    tables = [
-        r[0]
-        for r in connection.execute(
-            "select table_name from information_schema.tables "
-            "where table_schema = 'analytics' order by table_name"
-        ).fetchall()
-    ]
-    digest = hashlib.sha256()
-    for table in tables:
-        rows = sorted(
-            str(r[0])
+    previous = connection.execute("select current_setting('TimeZone')").fetchone()[0]
+    connection.execute("SET TimeZone = 'UTC'")
+    try:
+        tables = [
+            r[0]
             for r in connection.execute(
-                f'select cast(t as varchar) from analytics."{table}" as t'
+                "select table_name from information_schema.tables "
+                "where table_schema = 'analytics' order by table_name"
             ).fetchall()
-        )
-        digest.update(table.encode())
-        digest.update(RECORD_SEPARATOR.join(rows).encode())
-    return digest.hexdigest()
+        ]
+        digest = hashlib.sha256()
+        for table in tables:
+            rows = sorted(
+                str(r[0])
+                for r in connection.execute(
+                    f'select cast(t as varchar) from analytics."{table}" as t'
+                ).fetchall()
+            )
+            digest.update(table.encode())
+            digest.update(RECORD_SEPARATOR.join(rows).encode())
+        return digest.hexdigest()
+    finally:
+        connection.execute("SET TimeZone = ?", [previous])
 
 
 # The only files a snapshot directory is allowed to contain that this script will
