@@ -45,10 +45,19 @@ $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
 Push-Location $repo
 try {
     $env:PYTHONIOENCODING = 'utf-8'
-    $output = & $python $script 2>&1
+    # Windows PowerShell 5.1 wraps every line a native command writes to stderr in an
+    # ErrorRecord, and under ErrorActionPreference=Stop the first one is terminating.
+    # A failing publish writes its traceback to stderr, so this script used to die on
+    # the first line of it, before the FAIL branch below could run: Task Scheduler
+    # recorded exit 1 and the log recorded nothing, on exactly the runs somebody would
+    # open the log to understand. Continue here so the output is collected and the
+    # exit code decides; "$_" turns each ErrorRecord back into the line it wrapped.
+    $ErrorActionPreference = 'Continue'
+    $output = @(& $python $script 2>&1 | ForEach-Object { "$_" })
     $code = $LASTEXITCODE
 }
 finally {
+    $ErrorActionPreference = 'Stop'
     Pop-Location
 }
 

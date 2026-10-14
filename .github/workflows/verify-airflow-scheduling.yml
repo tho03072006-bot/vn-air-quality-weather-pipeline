@@ -89,7 +89,7 @@ jobs:
         run: |
           docker compose -f airflow/docker-compose.yml up -d
           for _ in $(seq 1 60); do
-            if curl -sf http://localhost:8080/api/v2/version > /dev/null; then
+            if curl -sf "http://localhost:${AIRFLOW_API_PORT:-8081}/api/v2/version" > /dev/null; then
               echo "api-server up"; exit 0
             fi
             sleep 5
