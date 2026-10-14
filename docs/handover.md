@@ -32,19 +32,21 @@ true when written and false when read.
 
 | Gate | Command | Result | Measured |
 |---|---|---|---|
-| Format | `ruff format --check .` | 63 files clean | 2026-09-08 |
-| Lint | `ruff check .` | pass | 2026-09-08 |
-| Unit tests | `pytest` | **178 passed, 1 skipped**, coverage 80.78% | 2026-09-08 |
-| dbt | `dbt build` | **PASS=171, ERROR=0** | 2026-09-08 |
+| Format | `ruff format --check .` | 67 files clean | 2026-10-14 |
+| Lint | `ruff check .` | pass | 2026-10-14 |
+| Unit tests | `pytest` | **277 passed, 1 skipped**, coverage 88.19% | 2026-10-14 |
+| dbt | `dbt build` on the demo warehouse `verify.ps1` builds | **PASS=172, ERROR=0** | 2026-10-14 |
 | Serving publish | `publish_to_sqlserver.py` | 11,548 rows, 15 relations, as `vn_air_publish` | 2026-09-08 |
 | **Permission boundary** | `verify_serving_logins.py` | **14/14** — reader refused 5 writes, writer allowed 6 operations and refused CREATE LOGIN | 2026-09-08 |
-| **Web application** | `mvn -o test` (in `../vn-air-web`) | **61 passed**, including 17 fidelity comparisons against this repo's queries | 2026-09-08 |
+| **Web application** | `scripts\mvn.ps1 -Offline` (in `../vn-air-web`, JDK 25) | **151 passed, 0 skipped**, including 18 fidelity comparisons against the frozen fixture | 2026-10-14 |
+| **Web, in a browser** | `scripts\verify_browser.py` (in `../vn-air-web`) | **36/36**: 9 pages × 390/1280 px × light/dark, no overflow, one h1 each | 2026-10-14 |
+| **live.js** | `node --test scripts/test-live.cjs`, `verify_live_browser.py` | **26/26**, **4/4** Chromium scenarios | 2026-10-14 |
 | **Deployed war** | 9 pages + `/live/stream` + `/actuator/health` over HTTP on Tomcat 11.0.25 | **14/14 URLs 200**, `servingDatabase: UP`, SSE `listeners: 1` | 2026-09-08 |
-| Byte-compile | `compileall src airflow/dags scripts` | exit 0 | 2026-09-08 |
+| Byte-compile | `compileall src airflow/dags scripts` | exit 0 | 2026-10-14 |
 | Compose | `docker compose -f airflow/docker-compose.yml config` | exit 0 | carried forward |
 | Airflow DagBag | `airflow dags list-import-errors` | **0 import errors**, both DAGs registered | carried forward |
 | Airflow pool | `airflow pools list` | `warehouse_writer` present, **1 slot** | carried forward |
-| **Airflow scheduled execution** | `verify-airflow-scheduling` workflow | **success, 4/4 tasks** via `dags trigger` | 2026-08-17 |
+| **Airflow scheduled execution** | the scheduler, catching up | forecast run **success** end to end to SQL Server; daily catch-up **66 runs success** after the closed-client fix (every daily run from 2026-08-19 had failed in `extract_store_and_load`) | 2026-10-14 |
 | Secret scan | `git grep` over tracked files | 2 known-benign hits | carried forward |
 
 **The test count fell from 344 to 178, and that is the removal, not a regression.**
@@ -138,23 +140,51 @@ reads `OPENAQ_API_KEY` from `.env`.
 
 ### The fingerprints the web application is measured against
 
-Regenerate these whenever a query in `src/vn_air_quality_weather/serving_queries.py`
-changes, and republish, so both sides are reading one dbt build:
+Both sides read one **frozen snapshot**, never the live warehouse or serving copy.
+`data/fixtures/serving_snapshot/` holds the serving marts materialised in a single
+DuckDB transaction at a pinned clock; the real publisher loads it into the isolated
+database `vn_air_quality_fidelity`, and the fingerprints are exported from the same
+snapshot. The five-minute timer and the hour turning therefore cannot change the
+expected values. Fingerprints are per column and per row (a digest keyed by each
+query's natural key), with floats canonicalised identically in Python and Java
+(exact binary value, HALF_EVEN, six places).
 
 ```powershell
-$env:DUCKDB_PATH = (Resolve-Path "data\warehouse\vn_air_quality_weather.duckdb").Path
-python scripts\export_query_fingerprints.py --out ..\vn-air-web\src\test\resources\query_fingerprints.json
-python scripts\publish_to_sqlserver.py
-cd ..\vn-air-web ; mvn -o test
+sqlcmd -S tcp:localhost,1433 -E -C -b -i scripts\sql\create_fidelity_fixture_db.sql   # once
+python scripts\export_query_fingerprints.py --load-fixture-db --out ..\vn-air-web\src\test\resources\query_fingerprints.json
+cd ..\vn-air-web ; powershell -ExecutionPolicy Bypass -File scripts\mvn.ps1 -Offline
 ```
+
+Add `--refresh-snapshot` to the export when a query in
+`src/vn_air_quality_weather/serving_queries.py` or a serving mart changes: it rebuilds
+the snapshot from the warehouse at a new pinned clock. The loader accepts only the
+literal database name `vn_air_quality_fidelity`.
 
 ### Airflow
 
 ```powershell
-docker compose -f airflow\docker-compose.yml build
+powershell -ExecutionPolicy Bypass -File scripts\preflight.ps1   # read-only; prints the fix for each FAIL
 docker compose -f airflow\docker-compose.yml up airflow-init
 docker compose -f airflow\docker-compose.yml up -d
+powershell -ExecutionPolicy Bypass -File scripts\verify_airflow_scheduling.ps1
 ```
+
+The UI is at http://localhost:8081 — host 8081, because Tomcat holds 8080. Run compose
+from a shell opened after the publish credential was set: the containers receive
+`SQLSERVER_USER`/`SQLSERVER_PASSWORD` from that shell, not from `.env`.
+
+**Expect the forecast DAG to run on its own as soon as the scheduler is back.** It is
+unpaused. On 2026-10-11, after eight weeks down, the scheduler first finished a run left
+`running` since 2026-08-16 and then ran the 12:00 UTC interval, before a triggered run
+could start. Each publishes, so `version_id` advances more than once.
+
+**Open risk: the five-minute timer and a DAG can touch the warehouse at once.** The DAG
+writes DuckDB inside the Docker VM; the timer reads the same file from Windows. The
+single-slot `warehouse_writer` pool serialises tasks inside Airflow only, and nothing here
+has shown whether DuckDB's file lock holds across the bind mount. On 2026-10-11 the timer
+was kept disabled until the triggered run finished, and a backup of the warehouse was
+taken first; in steady state the forecast DAG runs every six hours while the timer runs
+every five minutes, so they will overlap eventually. Untested, not known to be safe.
 
 For a one-off daily-DAG test of data date `2026-08-07`, pass the following interval end
 (not the data date) as the logical date:

@@ -391,12 +391,35 @@ server-side render time per page; results are recorded in
 ## Airflow 3 with Docker Compose
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File scripts\preflight.ps1
 docker compose -f airflow\docker-compose.yml build
 docker compose -f airflow\docker-compose.yml up airflow-init
 docker compose -f airflow\docker-compose.yml up -d
+powershell -ExecutionPolicy Bypass -File scripts\verify_airflow_scheduling.ps1
 ```
 
-Open http://localhost:8080. `vn_air_quality_weather_daily` handles historical
+Open http://localhost:8081. **The API server is published on host port 8081, not
+8080**, because Tomcat holds 8080 for vn-air-web and the two halves of this project
+have to run at the same time. Inside the stack nothing moved: containers still reach
+the API at `airflow-api-server:8080`. Override with `AIRFLOW_API_PORT` in the shell
+that runs compose — compose interpolates from the shell and from `airflow/.env`, not
+from the project's `.env`.
+
+**Run compose from a shell that has the publish credential.** `SQLSERVER_USER` and
+`SQLSERVER_PASSWORD` are user-scope environment variables, not `.env` entries, and
+`docker-compose.yml` passes them into every container from the shell that runs it.
+Before that pass-through existed, the containers read the blank fields in `.env` and
+`publish_serving_copy` failed on every run with *"SQLSERVER_USER is required"* — a
+regression no host-side check could see. `scripts\preflight.ps1` reports, without
+changing anything, every condition the stack and the web application depend on, and
+prints the fix beside each one that fails.
+
+`scripts\verify_airflow_scheduling.ps1` triggers a real DagRun and waits for the
+scheduler to finish it. `airflow dags test` runs in-process and never touches the
+scheduler or the Task Execution API, which is how a stack that could not schedule
+anything once passed every DAG check here (finding M).
+
+`vn_air_quality_weather_daily` handles historical
 ingestion/backfill; `vn_air_quality_weather_forecast` refreshes all 34 anchors
 every six hours without requiring OpenAQ credentials. This Compose deployment is a
 learning/local configuration, not a production security baseline. A terminal
